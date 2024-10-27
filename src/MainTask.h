@@ -1,6 +1,8 @@
 #include <Blinker.h>
 
-extern Network::Manager* network;
+using namespace NetworkUtils;
+
+extern NetworkMgr* network;
 extern MqttTask* tMqtt;
 extern OpenThermTask* tOt;
 extern FileData fsSettings, fsNetworkSettings;
@@ -27,7 +29,6 @@ protected:
   enum class PumpStartReason {NONE, HEATING, ANTISTUCK};
 
   Blinker* blinker = nullptr;
-  unsigned long firstFailConnect = 0;
   unsigned long lastHeapInfo = 0;
   unsigned int minFreeHeap = 0;
   unsigned int minMaxFreeBlockHeap = 0;
@@ -37,18 +38,22 @@ protected:
   PumpStartReason extPumpStartReason = PumpStartReason::NONE;
   unsigned long externalPumpStartTime = 0;
   bool telnetStarted = false;
+  bool emergencyDetected = false;
+  unsigned long emergencyFlipTime = 0;
 
-  const char* getTaskName() {
+  #if defined(ARDUINO_ARCH_ESP32)
+  const char* getTaskName() override {
     return "Main";
   }
 
-  /*int getTaskCore() {
+  /*BaseType_t getTaskCore() override {
     return 1;
   }*/
 
-  int getTaskPriority() {
+  int getTaskPriority() override {
     return 3;
   }
+  #endif
 
   void setup() {}
 
@@ -81,8 +86,10 @@ protected:
     vars.states.mqtt = tMqtt->isConnected();
     vars.sensors.rssi = network->isConnected() ? WiFi.RSSI() : 0;
 
-    if (vars.states.emergency && !settings.emergency.enable) {
-      vars.states.emergency = false;
+    if (settings.system.logLevel >= TinyLogger::Level::SILENT && settings.system.logLevel <= TinyLogger::Level::VERBOSE) {
+      if (Log.getLevel() != settings.system.logLevel) {
+        Log.setLevel(static_cast<TinyLogger::Level>(settings.system.logLevel));
+      }
     }
 
     if (network->isConnected()) {
@@ -98,24 +105,6 @@ protected:
         tMqtt->disable();
       }
 
-      if (!vars.states.emergency && settings.emergency.enable && settings.emergency.onMqttFault && !tMqtt->isEnabled()) {
-        vars.states.emergency = true;
-
-      } else if (vars.states.emergency && !settings.emergency.onMqttFault) {
-        vars.states.emergency = false;
-      }
-
-      if (this->firstFailConnect != 0) {
-        this->firstFailConnect = 0;
-      }
-
-      if ( Log.getLevel() != TinyLogger::Level::INFO && !settings.system.debug ) {
-        Log.setLevel(TinyLogger::Level::INFO);
-
-      } else if ( Log.getLevel() != TinyLogger::Level::VERBOSE && settings.system.debug ) {
-        Log.setLevel(TinyLogger::Level::VERBOSE);
-      }
-
     } else {
       if (this->telnetStarted) {
         telnetStream->stop();
@@ -125,22 +114,12 @@ protected:
       if (tMqtt->isEnabled()) {
         tMqtt->disable();
       }
-
-      if (!vars.states.emergency && settings.emergency.enable && settings.emergency.onNetworkFault) {
-        if (this->firstFailConnect == 0) {
-          this->firstFailConnect = millis();
-        }
-
-        if (millis() - this->firstFailConnect > (settings.emergency.tresholdTime * 1000)) {
-          vars.states.emergency = true;
-          Log.sinfoln(FPSTR(L_MAIN), F("Emergency mode enabled"));
-        }
-      }
     }
     this->yield();
 
-
+    this->emergency();
     this->ledStatus();
+    this->cascadeControl();
     this->externalPump();
     this->yield();
 
@@ -181,7 +160,7 @@ protected:
       this->restartSignalTime = millis();
     }
 
-    if (!settings.system.debug) {
+    if (settings.system.logLevel < TinyLogger::Level::VERBOSE) {
       return;
     }
 
@@ -206,6 +185,76 @@ protected:
         freeHeap, getTotalHeap(), this->minFreeHeap, minFreeHeapDiff, maxFreeBlockHeap, this->minMaxFreeBlockHeap, minMaxFreeBlockHeapDiff, getHeapFrag()
       );
       this->lastHeapInfo = millis();
+    }
+  }
+
+  void emergency() {
+    if (!settings.emergency.enable && vars.states.emergency) {
+      this->emergencyDetected = false;
+      vars.states.emergency = false;
+
+      Log.sinfoln(FPSTR(L_MAIN), F("Emergency mode disabled"));
+    }
+
+    if (!settings.emergency.enable) {
+      return;
+    }
+
+    // flags
+    uint8_t emergencyFlags = 0b00000000;
+
+    // set network flag
+    if (settings.emergency.onNetworkFault && !network->isConnected()) {
+      emergencyFlags |= 0b00000001;
+    }
+
+    // set mqtt flag
+    if (settings.emergency.onMqttFault && (!tMqtt->isEnabled() || !tMqtt->isConnected())) {
+      emergencyFlags |= 0b00000010;
+    }
+
+    // set outdoor sensor flag
+    if (settings.sensors.outdoor.type == SensorType::DS18B20 || settings.sensors.outdoor.type == SensorType::BLUETOOTH) {
+      if (settings.emergency.onOutdoorSensorDisconnect && !vars.sensors.outdoor.connected) {
+        emergencyFlags |= 0b00000100;
+      }
+    }
+
+    // set indoor sensor flag
+    if (settings.sensors.indoor.type == SensorType::DS18B20 || settings.sensors.indoor.type == SensorType::BLUETOOTH) {
+      if (settings.emergency.onIndoorSensorDisconnect && !vars.sensors.indoor.connected) {
+        emergencyFlags |= 0b00001000;
+      }
+    }
+
+    // if any flags is true
+    if ((emergencyFlags & 0b00001111) != 0) {
+      if (!this->emergencyDetected) {
+        // flip flag
+        this->emergencyDetected = true;
+        this->emergencyFlipTime = millis();
+
+      } else if (this->emergencyDetected && !vars.states.emergency) {
+        // enable emergency
+        if (millis() - this->emergencyFlipTime > (settings.emergency.tresholdTime * 1000)) {
+          vars.states.emergency = true;
+          Log.sinfoln(FPSTR(L_MAIN), F("Emergency mode enabled (%hhu)"), emergencyFlags);
+        }
+      }
+
+    } else {
+      if (this->emergencyDetected) {
+        // flip flag
+        this->emergencyDetected = false;
+        this->emergencyFlipTime = millis();
+
+      } else if (!this->emergencyDetected && vars.states.emergency) {
+        // disable emergency
+        if (millis() - this->emergencyFlipTime > 30000) {
+          vars.states.emergency = false;
+          Log.sinfoln(FPSTR(L_MAIN), F("Emergency mode disabled"));
+        }
+      }
     }
   }
 
@@ -286,6 +335,170 @@ protected:
     }
 
     this->blinker->tick();
+  }
+
+  void cascadeControl() {
+    static uint8_t configuredInputGpio = GPIO_IS_NOT_CONFIGURED;
+    static uint8_t configuredOutputGpio = GPIO_IS_NOT_CONFIGURED;
+    static bool inputTempValue = false;
+    static unsigned long inputChangedTs = 0;
+    static bool outputTempValue = false;
+    static unsigned long outputChangedTs = 0;
+
+    // input
+    if (settings.cascadeControl.input.enable) {
+      if (settings.cascadeControl.input.gpio != configuredInputGpio) {
+        if (configuredInputGpio != GPIO_IS_NOT_CONFIGURED) {
+          pinMode(configuredInputGpio, OUTPUT);
+          digitalWrite(configuredInputGpio, LOW);
+
+          Log.sinfoln(FPSTR(L_CASCADE_INPUT), F("Deinitialized on GPIO %hhu"), configuredInputGpio);
+        }
+        
+        if (GPIO_IS_VALID(settings.cascadeControl.input.gpio)) {
+          configuredInputGpio = settings.cascadeControl.input.gpio;
+          pinMode(configuredInputGpio, INPUT);
+
+          Log.sinfoln(FPSTR(L_CASCADE_INPUT), F("Initialized on GPIO %hhu"), configuredInputGpio);
+
+        } else if (configuredInputGpio != GPIO_IS_NOT_CONFIGURED) {
+          configuredInputGpio = GPIO_IS_NOT_CONFIGURED;
+
+          Log.swarningln(FPSTR(L_CASCADE_INPUT), F("Failed initialize: GPIO %hhu is not valid!"), configuredInputGpio);
+        }
+      }
+
+      if (configuredInputGpio != GPIO_IS_NOT_CONFIGURED) {
+        bool value;
+        if (digitalRead(configuredInputGpio) == HIGH) {
+          value = true ^ settings.cascadeControl.input.invertState;
+        } else {
+          value = false ^ settings.cascadeControl.input.invertState;
+        }
+
+        if (value != vars.cascadeControl.input) {
+          if (value != inputTempValue) {
+            inputTempValue = value;
+            inputChangedTs = millis();
+
+          } else if (millis() - inputChangedTs >= settings.cascadeControl.input.thresholdTime * 1000u) {
+            vars.cascadeControl.input = value;
+
+            Log.sinfoln(
+              FPSTR(L_CASCADE_INPUT),
+              F("State changed to %s"),
+              value ? F("TRUE") : F("FALSE")
+            );
+          }
+
+        } else if (value != inputTempValue) {
+          inputTempValue = value;
+        }
+      }
+    }
+    
+    if (!settings.cascadeControl.input.enable || configuredInputGpio == GPIO_IS_NOT_CONFIGURED) {
+      if (!vars.cascadeControl.input) {
+        vars.cascadeControl.input = true;
+
+        Log.sinfoln(
+          FPSTR(L_CASCADE_INPUT),
+          F("Disabled, state changed to %s"),
+          vars.cascadeControl.input ? F("TRUE") : F("FALSE")
+        );
+      }
+    }
+
+
+    // output
+    if (settings.cascadeControl.output.enable) {
+      if (settings.cascadeControl.output.gpio != configuredOutputGpio) {
+        if (configuredOutputGpio != GPIO_IS_NOT_CONFIGURED) {
+          pinMode(configuredOutputGpio, OUTPUT);
+          digitalWrite(configuredOutputGpio, LOW);
+
+          Log.sinfoln(FPSTR(L_CASCADE_OUTPUT), F("Deinitialized on GPIO %hhu"), configuredOutputGpio);
+        }
+        
+        if (GPIO_IS_VALID(settings.cascadeControl.output.gpio)) {
+          configuredOutputGpio = settings.cascadeControl.output.gpio;
+          pinMode(configuredOutputGpio, OUTPUT);
+          digitalWrite(
+            configuredOutputGpio,
+            settings.cascadeControl.output.invertState
+              ? HIGH 
+              : LOW
+          );
+
+          Log.sinfoln(FPSTR(L_CASCADE_OUTPUT), F("Initialized on GPIO %hhu"), configuredOutputGpio);
+
+        } else if (configuredOutputGpio != GPIO_IS_NOT_CONFIGURED) {
+          configuredOutputGpio = GPIO_IS_NOT_CONFIGURED;
+
+          Log.swarningln(FPSTR(L_CASCADE_OUTPUT), F("Failed initialize: GPIO %hhu is not valid!"), configuredOutputGpio);
+        }
+      }
+
+      if (configuredOutputGpio != GPIO_IS_NOT_CONFIGURED) {
+        bool value = false;
+        if (settings.cascadeControl.output.onFault && vars.states.fault) {
+          value = true;
+
+        } else if (settings.cascadeControl.output.onLossConnection && !vars.states.otStatus) {
+          value = true;
+
+        } else if (settings.cascadeControl.output.onEnabledHeating && settings.heating.enable && vars.cascadeControl.input) {
+          value = true;
+        }
+
+        if (value != vars.cascadeControl.output) {
+          if (value != outputTempValue) {
+            outputTempValue = value;
+            outputChangedTs = millis();
+            
+          } else if (millis() - outputChangedTs >= settings.cascadeControl.output.thresholdTime * 1000u) {
+            vars.cascadeControl.output = value;
+
+            digitalWrite(
+              configuredOutputGpio,
+              vars.cascadeControl.output ^ settings.cascadeControl.output.invertState
+                ? HIGH
+                : LOW
+            );
+
+            Log.sinfoln(
+              FPSTR(L_CASCADE_OUTPUT),
+              F("State changed to %s"),
+              value ? F("TRUE") : F("FALSE")
+            );
+          }
+
+        } else if (value != outputTempValue) {
+          outputTempValue = value;
+        }
+      }
+    }
+
+    if (!settings.cascadeControl.output.enable || configuredOutputGpio == GPIO_IS_NOT_CONFIGURED) {
+      if (vars.cascadeControl.output) {
+        vars.cascadeControl.output = false;
+
+        if (configuredOutputGpio != GPIO_IS_NOT_CONFIGURED) {
+          digitalWrite(
+            configuredOutputGpio,
+            vars.cascadeControl.output ^ settings.cascadeControl.output.invertState
+              ? HIGH
+              : LOW
+          );
+        }
+
+        Log.sinfoln(
+          FPSTR(L_CASCADE_OUTPUT),
+          F("Disabled, state changed to %s"),
+          vars.cascadeControl.output ? F("TRUE") : F("FALSE")
+        );
+      }
+    }
   }
 
   void externalPump() {

@@ -14,17 +14,19 @@ protected:
   float prevEtResult = 0;
   float prevPidResult = 0;
 
-  const char* getTaskName() {
+  #if defined(ARDUINO_ARCH_ESP32)
+  const char* getTaskName() override {
     return "Regulator";
   }
   
-  /*int getTaskCore() {
+  /*BaseType_t getTaskCore() override {
     return 1;
   }*/
 
-  int getTaskPriority() {
+  int getTaskPriority() override {
     return 4;
   }
+  #endif
   
   void loop() {
     float newTemp = vars.parameters.heatingSetpoint;
@@ -137,7 +139,8 @@ protected:
 
     // if use pid
     if (settings.pid.enable) {
-      if (vars.parameters.heatingEnabled) {
+      //if (vars.parameters.heatingEnabled) {
+      if (settings.heating.enable) {
         float pidResult = getPidTemp(
           settings.equitherm.enable ? (settings.pid.maxTemp * -1) : settings.pid.minTemp,
           settings.pid.maxTemp
@@ -158,8 +161,8 @@ protected:
       }
 
     } else if (fabs(pidRegulator.integral) > 0.0001f) {
-        pidRegulator.integral = 0;
-        Log.sinfoln(FPSTR(L_REGULATOR_PID), F("Integral sum has been reset"));
+      pidRegulator.integral = 0;
+      Log.sinfoln(FPSTR(L_REGULATOR_PID), F("Integral sum has been reset"));
     }
 
     // default temp, manual mode
@@ -196,6 +199,10 @@ protected:
         etRegulator.Kt = 0;
         etRegulator.indoorTemp = 0;
 
+      } else if ((settings.sensors.indoor.type == SensorType::DS18B20 || settings.sensors.indoor.type == SensorType::BLUETOOTH) && !vars.sensors.indoor.connected) {
+        etRegulator.Kt = 0;
+        etRegulator.indoorTemp = 0;
+        
       } else {
         etRegulator.Kt = settings.equitherm.t_factor;
         etRegulator.indoorTemp = indoorTemp;
@@ -253,7 +260,7 @@ protected:
     pidRegulator.setLimits(minTemp, maxTemp);
     pidRegulator.setDt(settings.pid.dt * 1000u);
     pidRegulator.input = vars.temperatures.indoor;
-    pidRegulator.setpoint = settings.heating.target;
+    pidRegulator.setpoint = vars.states.emergency ? settings.emergency.target : settings.heating.target;
 
     return pidRegulator.getResultTimer();
   }

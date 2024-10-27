@@ -1,4 +1,4 @@
-function setupForm(formSelector, onResultCallback = null) {
+function setupForm(formSelector, onResultCallback = null, noCastItems = []) {
   const form = document.querySelector(formSelector);
   if (!form) {
     return;
@@ -14,22 +14,19 @@ function setupForm(formSelector, onResultCallback = null) {
   let button = form.querySelector('button[type="submit"]');
   let defaultText;
 
-  if (button) {
-    defaultText = button.textContent;
-  }
-
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     if (button) {
-      button.textContent = 'Please wait...';
+      defaultText = button.textContent;
+      button.textContent = i18n("button.wait");
       button.setAttribute('disabled', true);
       button.setAttribute('aria-busy', true);
     }
 
     const onSuccess = (result) => {
       if (button) {
-        button.textContent = 'Saved';
+        button.textContent = i18n('button.saved');
         button.classList.add('success');
         button.removeAttribute('aria-busy');
 
@@ -43,7 +40,7 @@ function setupForm(formSelector, onResultCallback = null) {
 
     const onFailed = () => {
       if (button) {
-        button.textContent = 'Error';
+        button.textContent = i18n('button.error');
         button.classList.add('failed');
         button.removeAttribute('aria-busy');
 
@@ -68,7 +65,7 @@ function setupForm(formSelector, onResultCallback = null) {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: form2json(fd)
+        body: form2json(fd, noCastItems)
       });
 
       if (!response.ok) {
@@ -100,17 +97,14 @@ function setupNetworkScanForm(formSelector, tableSelector) {
   let button = form.querySelector('button[type="submit"]');
   let defaultText;
 
-  if (button) {
-    defaultText = button.innerHTML;
-  }
-
   const onSubmitFn = async (event) => {
     if (event) {
       event.preventDefault();
     }
 
     if (button) {
-      button.innerHTML = 'Please wait...';
+      defaultText = button.innerHTML;
+      button.innerHTML = i18n('button.wait');
       button.setAttribute('disabled', true);
       button.setAttribute('aria-busy', true);
     }
@@ -139,7 +133,7 @@ function setupNetworkScanForm(formSelector, tableSelector) {
         row.classList.add("network");
         row.setAttribute('data-ssid', result[i].hidden ? '' : result[i].ssid);
         row.onclick = function () {
-          const input = document.querySelector('input.sta-ssid');
+          const input = document.querySelector('input#sta-ssid');
           const ssid = this.getAttribute('data-ssid');
           if (!input || !ssid) {
             return;
@@ -150,19 +144,56 @@ function setupNetworkScanForm(formSelector, tableSelector) {
         };
 
         row.insertCell().textContent = "#" + (i + 1);
-        row.insertCell().innerHTML = result[i].hidden ? '<i>Hidden</i>' : result[i].ssid;
+        row.insertCell().innerHTML = result[i].hidden ? ("<i>" + result[i].bssid + "</i>") : result[i].ssid;
 
-        const signalCell = row.insertCell();
-        const signalElement = document.createElement("kbd");
-        signalElement.textContent = result[i].signalQuality + "%";
-        if (result[i].signalQuality > 60) {
-          signalElement.classList.add('greatSignal');
+        // info cell
+        let infoCell = row.insertCell();
+
+        // signal quality
+        let signalQualityIcon = document.createElement("i");
+        if (result[i].signalQuality > 80) {
+          signalQualityIcon.classList.add('icons-wifi-strength-4');
+        } else if (result[i].signalQuality > 60) {
+          signalQualityIcon.classList.add('icons-wifi-strength-3');
         } else if (result[i].signalQuality > 40) {
-          signalElement.classList.add('normalSignal');
+          signalQualityIcon.classList.add('icons-wifi-strength-2');
+        } else if (result[i].signalQuality > 20) {
+          signalQualityIcon.classList.add('icons-wifi-strength-1');
         } else {
-          signalElement.classList.add('badSignal');
+          signalQualityIcon.classList.add('icons-wifi-strength-0');
         }
-        signalCell.appendChild(signalElement);
+        
+        let signalQualityContainer = document.createElement("span");
+        signalQualityContainer.setAttribute('data-tooltip', result[i].signalQuality + "%");
+        signalQualityContainer.appendChild(signalQualityIcon);
+        infoCell.appendChild(signalQualityContainer);
+
+        // auth
+        const authList = {
+          0: "Open",
+          1: "WEP",
+          2: "WPA",
+          3: "WPA2",
+          4: "WPA/WPA2",
+          5: "WPA/WPA2 Enterprise",
+          6: "WPA3",
+          7: "WPA2/WPA3",
+          8: "WAPI",
+          9: "OWE",
+          10: "WPA3 Enterprise"
+        };
+        let authIcon = document.createElement("i");
+
+        if (result[i].auth == 0) {
+          authIcon.classList.add('icons-unlocked');
+        } else {
+          authIcon.classList.add('icons-locked');
+        }
+
+        let authContainer = document.createElement("span");
+        authContainer.setAttribute('data-tooltip', (result[i].auth in authList) ? authList[result[i].auth] : "unknown");
+        authContainer.appendChild(authIcon);
+        infoCell.appendChild(authContainer);
       }
 
       if (button) {
@@ -225,22 +256,19 @@ function setupRestoreBackupForm(formSelector) {
   let button = form.querySelector('button[type="submit"]');
   let defaultText;
 
-  if (button) {
-    defaultText = button.textContent;
-  }
-
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     if (button) {
-      button.textContent = 'Please wait...';
+      defaultText = button.textContent;
+      button.textContent = i18n('button.wait');
       button.setAttribute('disabled', true);
       button.setAttribute('aria-busy', true);
     }
 
     const onSuccess = (response) => {
       if (button) {
-        button.textContent = 'Restored';
+        button.textContent = i18n('button.restored');
         button.classList.add('success');
         button.removeAttribute('aria-busy');
 
@@ -254,7 +282,7 @@ function setupRestoreBackupForm(formSelector) {
 
     const onFailed = (response) => {
       if (button) {
-        button.textContent = 'Error';
+        button.textContent = i18n('button.error');
         button.classList.add('failed');
         button.removeAttribute('aria-busy');
 
@@ -311,10 +339,6 @@ function setupUpgradeForm(formSelector) {
   const url = form.action;
   let button = form.querySelector('button[type="submit"]');
   let defaultText;
-
-  if (button) {
-    defaultText = button.textContent;
-  }
 
   const statusToText = (status) => {
     switch (status) {
@@ -400,7 +424,7 @@ function setupUpgradeForm(formSelector) {
 
   const onFailed = (response) => {
     if (button) {
-      button.textContent = 'Error';
+      button.textContent = i18n('button.error');
       button.classList.add('failed');
       button.removeAttribute('aria-busy');
 
@@ -419,7 +443,8 @@ function setupUpgradeForm(formSelector) {
     hide('.upgrade-filesystem-result');
 
     if (button) {
-      button.textContent = 'Uploading...';
+      defaultText = button.textContent;
+      button.textContent = i18n('button.uploading');
       button.setAttribute('disabled', true);
       button.setAttribute('aria-busy', true);
     }
@@ -514,6 +539,17 @@ function setInputValue(selector, value, attrs = {}) {
   }
 }
 
+function setSelectValue(selector, value) {
+  let item = document.querySelector(selector);
+  if (!item) {
+    return;
+  }
+
+  for (let option of item.options) {
+    option.selected = option.value == value;
+  }
+}
+
 function show(selector) {
   let items = document.querySelectorAll(selector);
   if (!items.length) {
@@ -584,7 +620,7 @@ function memberIdToVendor(memberId) {
     27:   "Baxi",
     29:   "Itho Daalderop",
     33:   "Viessmann",
-    41:   "Italtherm",
+    41:   "Italtherm/Radiant",
     56:   "Baxi Luna Duo-Tec",
     131:  "Nefit",
     148:  "Navien",
@@ -598,15 +634,19 @@ function memberIdToVendor(memberId) {
     : "unknown vendor";
 }
 
-function form2json(data) {
+function form2json(data, noCastItems = []) {
   let method = function (object, pair) {
     let keys = pair[0].replace(/\]/g, '').split('[');
     let key = keys[0];
     let value = pair[1];
-    if (value === 'true' || value === 'false') {
-      value = value === 'true';
-    } else if (typeof (value) === 'string' && value.trim() !== '' && !isNaN(value)) {
-      value = parseFloat(value);
+
+    if (!noCastItems.includes(keys.join('.'))) {
+      if (value === 'true' || value === 'false') {
+        value = value === 'true';
+
+      } else if (typeof (value) === 'string' && value.trim() !== '' && !isNaN(value)) {
+        value = parseFloat(value);
+      }
     }
 
     if (keys.length > 1) {
@@ -636,4 +676,13 @@ function form2json(data) {
 
   let object = Array.from(data).reduce(method, {});
   return JSON.stringify(object);
+}
+
+function dec2hex(i) {
+  let hex = parseInt(i).toString(16);
+  if (hex.length % 2 != 0) {
+    hex = "0" + hex;
+  }
+  
+  return hex.toUpperCase();
 }

@@ -188,6 +188,22 @@ String getResetReason() {
   return value;
 }
 
+template <class T>
+void arr2str(String &str, T arr[], size_t length) {
+  char buffer[12];
+  for (size_t i = 0; i < length; i++) {
+    auto addr = arr[i];
+    if (!addr) {
+      continue;
+    }
+    
+    sprintf(buffer, "0x%08X ", addr);
+    str.concat(buffer);
+  }
+
+  str.trim();
+}
+
 void networkSettingsToJson(const NetworkSettings& src, JsonVariant dst) {
   dst["hostname"] = src.hostname;
 
@@ -326,7 +342,7 @@ bool jsonToNetworkSettings(const JsonVariantConst src, NetworkSettings& dst) {
 
 void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
   if (!safe) {
-    dst["system"]["debug"] = src.system.debug;
+    dst["system"]["logLevel"] = static_cast<uint8_t>(src.system.logLevel);
     dst["system"]["serial"]["enable"] = src.system.serial.enable;
     dst["system"]["serial"]["baudrate"] = src.system.serial.baudrate;
     dst["system"]["telnet"]["enable"] = src.system.telnet.enable;
@@ -343,6 +359,11 @@ void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
     dst["opentherm"]["outGpio"] = src.opentherm.outGpio;
     dst["opentherm"]["rxLedGpio"] = src.opentherm.rxLedGpio;
     dst["opentherm"]["memberIdCode"] = src.opentherm.memberIdCode;
+    dst["opentherm"]["maxModulation"] = src.opentherm.maxModulation;
+    dst["opentherm"]["pressureFactor"] = roundd(src.opentherm.pressureFactor, 2);
+    dst["opentherm"]["dhwFlowRateFactor"] = roundd(src.opentherm.dhwFlowRateFactor, 2);
+    dst["opentherm"]["minPower"] = roundd(src.opentherm.minPower, 2);
+    dst["opentherm"]["maxPower"] = roundd(src.opentherm.maxPower, 2);
     dst["opentherm"]["dhwPresent"] = src.opentherm.dhwPresent;
     dst["opentherm"]["summerWinterMode"] = src.opentherm.summerWinterMode;
     dst["opentherm"]["heatingCh2Enabled"] = src.opentherm.heatingCh2Enabled;
@@ -352,6 +373,9 @@ void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
     dst["opentherm"]["modulationSyncWithHeating"] = src.opentherm.modulationSyncWithHeating;
     dst["opentherm"]["getMinMaxTemp"] = src.opentherm.getMinMaxTemp;
     dst["opentherm"]["nativeHeatingControl"] = src.opentherm.nativeHeatingControl;
+    dst["opentherm"]["immergasFix"] = src.opentherm.immergasFix;
+    dst["opentherm"]["filterNumValues"]["enable"] = src.opentherm.filterNumValues.enable;
+    dst["opentherm"]["filterNumValues"]["factor"] = roundd(src.opentherm.filterNumValues.factor, 2);
 
     dst["mqtt"]["enable"] = src.mqtt.enable;
     dst["mqtt"]["server"] = src.mqtt.server;
@@ -369,6 +393,8 @@ void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
     dst["emergency"]["usePid"] = src.emergency.usePid;
     dst["emergency"]["onNetworkFault"] = src.emergency.onNetworkFault;
     dst["emergency"]["onMqttFault"] = src.emergency.onMqttFault;
+    dst["emergency"]["onIndoorSensorDisconnect"] = src.emergency.onIndoorSensorDisconnect;
+    dst["emergency"]["onOutdoorSensorDisconnect"] = src.emergency.onOutdoorSensorDisconnect;
   }
 
   dst["heating"]["enable"] = src.heating.enable;
@@ -377,7 +403,6 @@ void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
   dst["heating"]["hysteresis"] = roundd(src.heating.hysteresis, 2);
   dst["heating"]["minTemp"] = src.heating.minTemp;
   dst["heating"]["maxTemp"] = src.heating.maxTemp;
-  dst["heating"]["maxModulation"] = src.heating.maxModulation;
 
   dst["dhw"]["enable"] = src.dhw.enable;
   dst["dhw"]["target"] = roundd(src.dhw.target, 1);
@@ -399,23 +424,35 @@ void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
 
   dst["sensors"]["outdoor"]["type"] = static_cast<byte>(src.sensors.outdoor.type);
   dst["sensors"]["outdoor"]["gpio"] = src.sensors.outdoor.gpio;
-  dst["sensors"]["outdoor"]["offset"] = roundd(src.sensors.outdoor.offset, 2);
-
-  dst["sensors"]["indoor"]["type"] = static_cast<byte>(src.sensors.indoor.type);
-  dst["sensors"]["indoor"]["gpio"] = src.sensors.indoor.gpio;
 
   char bleAddress[18];
   sprintf(
     bleAddress,
     "%02x:%02x:%02x:%02x:%02x:%02x",
-    src.sensors.indoor.bleAddresss[0],
-    src.sensors.indoor.bleAddresss[1],
-    src.sensors.indoor.bleAddresss[2],
-    src.sensors.indoor.bleAddresss[3],
-    src.sensors.indoor.bleAddresss[4],
-    src.sensors.indoor.bleAddresss[5]
+    src.sensors.outdoor.bleAddress[0],
+    src.sensors.outdoor.bleAddress[1],
+    src.sensors.outdoor.bleAddress[2],
+    src.sensors.outdoor.bleAddress[3],
+    src.sensors.outdoor.bleAddress[4],
+    src.sensors.outdoor.bleAddress[5]
   );
-  dst["sensors"]["indoor"]["bleAddresss"] = String(bleAddress);
+  dst["sensors"]["outdoor"]["bleAddress"] = String(bleAddress);
+  dst["sensors"]["outdoor"]["offset"] = roundd(src.sensors.outdoor.offset, 2);
+
+  dst["sensors"]["indoor"]["type"] = static_cast<byte>(src.sensors.indoor.type);
+  dst["sensors"]["indoor"]["gpio"] = src.sensors.indoor.gpio;
+
+  sprintf(
+    bleAddress,
+    "%02x:%02x:%02x:%02x:%02x:%02x",
+    src.sensors.indoor.bleAddress[0],
+    src.sensors.indoor.bleAddress[1],
+    src.sensors.indoor.bleAddress[2],
+    src.sensors.indoor.bleAddress[3],
+    src.sensors.indoor.bleAddress[4],
+    src.sensors.indoor.bleAddress[5]
+  );
+  dst["sensors"]["indoor"]["bleAddress"] = String(bleAddress);
   dst["sensors"]["indoor"]["offset"] = roundd(src.sensors.indoor.offset, 2);
 
   if (!safe) {
@@ -424,6 +461,19 @@ void settingsToJson(const Settings& src, JsonVariant dst, bool safe = false) {
     dst["externalPump"]["postCirculationTime"] = roundd(src.externalPump.postCirculationTime / 60, 0);
     dst["externalPump"]["antiStuckInterval"] = roundd(src.externalPump.antiStuckInterval / 86400, 0);
     dst["externalPump"]["antiStuckTime"] = roundd(src.externalPump.antiStuckTime / 60, 0);
+
+    dst["cascadeControl"]["input"]["enable"] = src.cascadeControl.input.enable;
+    dst["cascadeControl"]["input"]["gpio"] = src.cascadeControl.input.gpio;
+    dst["cascadeControl"]["input"]["invertState"] = src.cascadeControl.input.invertState;
+    dst["cascadeControl"]["input"]["thresholdTime"] = src.cascadeControl.input.thresholdTime;
+
+    dst["cascadeControl"]["output"]["enable"] = src.cascadeControl.output.enable;
+    dst["cascadeControl"]["output"]["gpio"] = src.cascadeControl.output.gpio;
+    dst["cascadeControl"]["output"]["invertState"] = src.cascadeControl.output.invertState;
+    dst["cascadeControl"]["output"]["thresholdTime"] = src.cascadeControl.output.thresholdTime;
+    dst["cascadeControl"]["output"]["onFault"] = src.cascadeControl.output.onFault;
+    dst["cascadeControl"]["output"]["onLossConnection"] = src.cascadeControl.output.onLossConnection;
+    dst["cascadeControl"]["output"]["onEnabledHeating"] = src.cascadeControl.output.onEnabledHeating;
   }
 }
 
@@ -436,11 +486,11 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
 
   if (!safe) {
     // system
-    if (src["system"]["debug"].is<bool>()) {
-      bool value = src["system"]["debug"].as<bool>();
+    if (!src["system"]["logLevel"].isNull()) {
+      uint8_t value = src["system"]["logLevel"].as<uint8_t>();
 
-      if (value != dst.system.debug) {
-        dst.system.debug = value;
+      if (value != dst.system.logLevel && value >= TinyLogger::Level::SILENT && value <= TinyLogger::Level::VERBOSE) {
+        dst.system.logLevel = value;
         changed = true;
       }
     }
@@ -651,9 +701,76 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
       }
     }
 
+    if (!src["opentherm"]["maxModulation"].isNull()) {
+      unsigned char value = src["opentherm"]["maxModulation"].as<unsigned char>();
+
+      if (value > 0 && value <= 100 && value != dst.opentherm.maxModulation) {
+        dst.opentherm.maxModulation = value;
+        changed = true;
+      }
+    }
+
+    if (!src["opentherm"]["pressureFactor"].isNull()) {
+      float value = src["opentherm"]["pressureFactor"].as<float>();
+
+      if (value > 0 && value <= 100 && fabs(value - dst.opentherm.pressureFactor) > 0.0001f) {
+        dst.opentherm.pressureFactor = roundd(value, 2);
+        changed = true;
+      }
+    }
+
+    if (!src["opentherm"]["dhwFlowRateFactor"].isNull()) {
+      float value = src["opentherm"]["dhwFlowRateFactor"].as<float>();
+
+      if (value > 0 && value <= 100 && fabs(value - dst.opentherm.dhwFlowRateFactor) > 0.0001f) {
+        dst.opentherm.dhwFlowRateFactor = roundd(value, 2);
+        changed = true;
+      }
+    }
+
+    if (!src["opentherm"]["minPower"].isNull()) {
+      float value = src["opentherm"]["minPower"].as<float>();
+
+      if (value >= 0 && value <= 1000 && fabs(value - dst.opentherm.minPower) > 0.0001f) {
+        dst.opentherm.minPower = roundd(value, 2);
+        changed = true;
+      }
+    }
+
+    if (!src["opentherm"]["maxPower"].isNull()) {
+      float value = src["opentherm"]["maxPower"].as<float>();
+
+      if (value >= 0 && value <= 1000 && fabs(value - dst.opentherm.maxPower) > 0.0001f) {
+        dst.opentherm.maxPower = roundd(value, 2);
+        changed = true;
+      }
+    }
+
+    if (src["opentherm"]["filterNumValues"]["enable"].is<bool>()) {
+      bool value = src["opentherm"]["filterNumValues"]["enable"].as<bool>();
+
+      if (value != dst.opentherm.filterNumValues.enable) {
+        dst.opentherm.filterNumValues.enable = value;
+        changed = true;
+      }
+    }
+
+    if (!src["opentherm"]["filterNumValues"]["factor"].isNull()) {
+      float value = src["opentherm"]["filterNumValues"]["factor"].as<float>();
+
+      if (value > 0 && value <= 1 && fabs(value - dst.opentherm.filterNumValues.factor) > 0.0001f) {
+        dst.opentherm.filterNumValues.factor = roundd(value, 2);
+        changed = true;
+      }
+    }
+
     if (src["opentherm"]["dhwPresent"].is<bool>()) {
-      dst.opentherm.dhwPresent = src["opentherm"]["dhwPresent"].as<bool>();
-      changed = true;
+      bool value = src["opentherm"]["dhwPresent"].as<bool>();
+
+      if (value != dst.opentherm.dhwPresent) {
+        dst.opentherm.dhwPresent = value;
+        changed = true;
+      }
     }
 
     if (src["opentherm"]["summerWinterMode"].is<bool>()) {
@@ -750,6 +867,15 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
           dst.pid.enable = false;
         }
 
+        changed = true;
+      }
+    }
+
+    if (src["opentherm"]["immergasFix"].is<bool>()) {
+      bool value = src["opentherm"]["immergasFix"].as<bool>();
+
+      if (value != dst.opentherm.immergasFix) {
+        dst.opentherm.immergasFix = value;
         changed = true;
       }
     }
@@ -851,7 +977,7 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
     if (src["emergency"]["useEquitherm"].is<bool>()) {
       bool value = src["emergency"]["useEquitherm"].as<bool>();
 
-      if (!dst.opentherm.nativeHeatingControl && dst.sensors.outdoor.type != SensorType::MANUAL) {
+      if (!dst.opentherm.nativeHeatingControl && dst.sensors.outdoor.type != SensorType::MANUAL && dst.sensors.outdoor.type != SensorType::BLUETOOTH) {
         if (value != dst.emergency.useEquitherm) {
           dst.emergency.useEquitherm = value;
           changed = true;
@@ -871,7 +997,7 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
     if (src["emergency"]["usePid"].is<bool>()) {
       bool value = src["emergency"]["usePid"].as<bool>();
 
-      if (!dst.opentherm.nativeHeatingControl && dst.sensors.indoor.type != SensorType::MANUAL) {
+      if (!dst.opentherm.nativeHeatingControl && dst.sensors.indoor.type != SensorType::MANUAL && dst.sensors.indoor.type != SensorType::BLUETOOTH) {
         if (value != dst.emergency.usePid) {
           dst.emergency.usePid = value;
           changed = true;
@@ -902,6 +1028,26 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
 
       if (value != dst.emergency.onMqttFault) {
         dst.emergency.onMqttFault = value;
+        changed = true;
+      }
+    }
+
+    if (src["emergency"]["onIndoorSensorDisconnect"].is<bool>()) {
+      bool value = src["emergency"]["onIndoorSensorDisconnect"].as<bool>();
+
+      if (value != dst.emergency.onIndoorSensorDisconnect) {
+        dst.emergency.onIndoorSensorDisconnect = value;
+        dst.emergency.usePid = false;
+        changed = true;
+      }
+    }
+
+    if (src["emergency"]["onOutdoorSensorDisconnect"].is<bool>()) {
+      bool value = src["emergency"]["onOutdoorSensorDisconnect"].as<bool>();
+
+      if (value != dst.emergency.onOutdoorSensorDisconnect) {
+        dst.emergency.onOutdoorSensorDisconnect = value;
+        dst.emergency.useEquitherm = false;
         changed = true;
       }
     }
@@ -954,7 +1100,7 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
   if (!src["pid"]["dt"].isNull()) {
     unsigned short value = src["pid"]["dt"].as<unsigned short>();
 
-    if (value >= 30 && value <= 600 && value != dst.pid.dt) {
+    if (value >= 30 && value <= 1800 && value != dst.pid.dt) {
       dst.pid.dt = value;
       changed = true;
     }
@@ -1069,15 +1215,6 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
     }
   }
 
-  if (!src["heating"]["maxModulation"].isNull()) {
-    unsigned char value = src["heating"]["maxModulation"].as<unsigned char>();
-
-    if (value > 0 && value <= 100 && value != dst.heating.maxModulation) {
-      dst.heating.maxModulation = value;
-      changed = true;
-    }
-  }
-
 
   // dhw
   if (src["dhw"]["enable"].is<bool>()) {
@@ -1135,6 +1272,16 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
         }
         break;
 
+      #if USE_BLE
+      case static_cast<byte>(SensorType::BLUETOOTH):
+        if (dst.sensors.outdoor.type != SensorType::BLUETOOTH) {
+          dst.sensors.outdoor.type = SensorType::BLUETOOTH;
+          dst.emergency.useEquitherm = false;
+          changed = true;
+        }
+        break;
+      #endif
+
       default:
         break;
     }
@@ -1156,6 +1303,21 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
       }
     }
   }
+
+  #if USE_BLE
+  if (!src["sensors"]["outdoor"]["bleAddress"].isNull()) {
+    String value = src["sensors"]["outdoor"]["bleAddress"].as<String>();
+    int tmp[6];
+    if(sscanf(value.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x", &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5]) == 6) {
+      for(uint8_t i = 0; i < 6; i++) {
+        if (dst.sensors.outdoor.bleAddress[i] != (uint8_t) tmp[i]) {
+          dst.sensors.outdoor.bleAddress[i] = (uint8_t) tmp[i];
+          changed = true;
+        }
+      }
+    }
+  }
+  #endif
 
   if (!src["sensors"]["outdoor"]["offset"].isNull()) {
     float value = src["sensors"]["outdoor"]["offset"].as<float>();
@@ -1190,6 +1352,7 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
       case static_cast<byte>(SensorType::BLUETOOTH):
         if (dst.sensors.indoor.type != SensorType::BLUETOOTH) {
           dst.sensors.indoor.type = SensorType::BLUETOOTH;
+          dst.emergency.usePid = false;
           changed = true;
         }
         break;
@@ -1218,13 +1381,13 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
   }
 
   #if USE_BLE
-  if (!src["sensors"]["indoor"]["bleAddresss"].isNull()) {
-    String value = src["sensors"]["indoor"]["bleAddresss"].as<String>();
+  if (!src["sensors"]["indoor"]["bleAddress"].isNull()) {
+    String value = src["sensors"]["indoor"]["bleAddress"].as<String>();
     int tmp[6];
     if(sscanf(value.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x", &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5]) == 6) {
       for(uint8_t i = 0; i < 6; i++) {
-        if (dst.sensors.indoor.bleAddresss[i] != (uint8_t) tmp[i]) {
-          dst.sensors.indoor.bleAddresss[i] = (uint8_t) tmp[i];
+        if (dst.sensors.indoor.bleAddress[i] != (uint8_t) tmp[i]) {
+          dst.sensors.indoor.bleAddress[i] = (uint8_t) tmp[i];
           changed = true;
         }
       }
@@ -1306,6 +1469,127 @@ bool jsonToSettings(const JsonVariantConst src, Settings& dst, bool safe = false
           dst.externalPump.antiStuckTime = value;
           changed = true;
         }
+      }
+    }
+
+
+    // cascade control
+    if (src["cascadeControl"]["input"]["enable"].is<bool>()) {
+      bool value = src["cascadeControl"]["input"]["enable"].as<bool>();
+
+      if (value != dst.cascadeControl.input.enable) {
+        dst.cascadeControl.input.enable = value;
+        changed = true;
+      }
+    }
+
+    if (!src["cascadeControl"]["input"]["gpio"].isNull()) {
+      if (src["cascadeControl"]["input"]["gpio"].is<JsonString>() && src["cascadeControl"]["input"]["gpio"].as<JsonString>().size() == 0) {
+        if (dst.cascadeControl.input.gpio != GPIO_IS_NOT_CONFIGURED) {
+          dst.cascadeControl.input.gpio = GPIO_IS_NOT_CONFIGURED;
+          changed = true;
+        }
+        
+      } else {
+        unsigned char value = src["cascadeControl"]["input"]["gpio"].as<unsigned char>();
+
+        if (GPIO_IS_VALID(value) && value != dst.cascadeControl.input.gpio) {
+          dst.cascadeControl.input.gpio = value;
+          changed = true;
+        }
+      }
+    }
+
+    if (src["cascadeControl"]["input"]["invertState"].is<bool>()) {
+      bool value = src["cascadeControl"]["input"]["invertState"].as<bool>();
+
+      if (value != dst.cascadeControl.input.invertState) {
+        dst.cascadeControl.input.invertState = value;
+        changed = true;
+      }
+    }
+
+    if (!src["cascadeControl"]["input"]["thresholdTime"].isNull()) {
+      unsigned short value = src["cascadeControl"]["input"]["thresholdTime"].as<unsigned short>();
+
+      if (value >= 5 && value <= 600) {
+        if (value != dst.cascadeControl.input.thresholdTime) {
+          dst.cascadeControl.input.thresholdTime = value;
+          changed = true;
+        }
+      }
+    }
+
+    if (src["cascadeControl"]["output"]["enable"].is<bool>()) {
+      bool value = src["cascadeControl"]["output"]["enable"].as<bool>();
+
+      if (value != dst.cascadeControl.output.enable) {
+        dst.cascadeControl.output.enable = value;
+        changed = true;
+      }
+    }
+
+    if (!src["cascadeControl"]["output"]["gpio"].isNull()) {
+      if (src["cascadeControl"]["output"]["gpio"].is<JsonString>() && src["cascadeControl"]["output"]["gpio"].as<JsonString>().size() == 0) {
+        if (dst.cascadeControl.output.gpio != GPIO_IS_NOT_CONFIGURED) {
+          dst.cascadeControl.output.gpio = GPIO_IS_NOT_CONFIGURED;
+          changed = true;
+        }
+        
+      } else {
+        unsigned char value = src["cascadeControl"]["output"]["gpio"].as<unsigned char>();
+
+        if (GPIO_IS_VALID(value) && value != dst.cascadeControl.output.gpio) {
+          dst.cascadeControl.output.gpio = value;
+          changed = true;
+        }
+      }
+    }
+
+    if (src["cascadeControl"]["output"]["invertState"].is<bool>()) {
+      bool value = src["cascadeControl"]["output"]["invertState"].as<bool>();
+
+      if (value != dst.cascadeControl.output.invertState) {
+        dst.cascadeControl.output.invertState = value;
+        changed = true;
+      }
+    }
+
+    if (!src["cascadeControl"]["output"]["thresholdTime"].isNull()) {
+      unsigned short value = src["cascadeControl"]["output"]["thresholdTime"].as<unsigned short>();
+
+      if (value >= 5 && value <= 600) {
+        if (value != dst.cascadeControl.output.thresholdTime) {
+          dst.cascadeControl.output.thresholdTime = value;
+          changed = true;
+        }
+      }
+    }
+
+    if (src["cascadeControl"]["output"]["onFault"].is<bool>()) {
+      bool value = src["cascadeControl"]["output"]["onFault"].as<bool>();
+
+      if (value != dst.cascadeControl.output.onFault) {
+        dst.cascadeControl.output.onFault = value;
+        changed = true;
+      }
+    }
+
+    if (src["cascadeControl"]["output"]["onLossConnection"].is<bool>()) {
+      bool value = src["cascadeControl"]["output"]["onLossConnection"].as<bool>();
+
+      if (value != dst.cascadeControl.output.onLossConnection) {
+        dst.cascadeControl.output.onLossConnection = value;
+        changed = true;
+      }
+    }
+
+    if (src["cascadeControl"]["output"]["onEnabledHeating"].is<bool>()) {
+      bool value = src["cascadeControl"]["output"]["onEnabledHeating"].as<bool>();
+
+      if (value != dst.cascadeControl.output.onEnabledHeating) {
+        dst.cascadeControl.output.onEnabledHeating = value;
+        changed = true;
       }
     }
   }
@@ -1404,9 +1688,19 @@ void varsToJson(const Variables& src, JsonVariant dst) {
   dst["sensors"]["modulation"] = roundd(src.sensors.modulation, 2);
   dst["sensors"]["pressure"] = roundd(src.sensors.pressure, 2);
   dst["sensors"]["dhwFlowRate"] = roundd(src.sensors.dhwFlowRate, 2);
+  dst["sensors"]["power"] = roundd(src.sensors.power, 2);
   dst["sensors"]["faultCode"] = src.sensors.faultCode;
+  dst["sensors"]["diagnosticCode"] = src.sensors.diagnosticCode;
   dst["sensors"]["rssi"] = src.sensors.rssi;
   dst["sensors"]["uptime"] = millis() / 1000ul;
+  dst["sensors"]["outdoor"]["connected"] = src.sensors.outdoor.connected;
+  dst["sensors"]["outdoor"]["rssi"] = src.sensors.outdoor.rssi;
+  dst["sensors"]["outdoor"]["battery"] = roundd(src.sensors.outdoor.battery, 2);
+  dst["sensors"]["outdoor"]["humidity"] = roundd(src.sensors.outdoor.humidity, 2);
+  dst["sensors"]["indoor"]["connected"] = src.sensors.indoor.connected;
+  dst["sensors"]["indoor"]["rssi"] = src.sensors.indoor.rssi;
+  dst["sensors"]["indoor"]["battery"] = roundd(src.sensors.indoor.battery, 2);
+  dst["sensors"]["indoor"]["humidity"] = roundd(src.sensors.indoor.humidity, 2);
 
   dst["temperatures"]["indoor"] = roundd(src.temperatures.indoor, 2);
   dst["temperatures"]["outdoor"] = roundd(src.temperatures.outdoor, 2);
@@ -1414,6 +1708,9 @@ void varsToJson(const Variables& src, JsonVariant dst) {
   dst["temperatures"]["heatingReturn"] = roundd(src.temperatures.heatingReturn, 2);
   dst["temperatures"]["dhw"] = roundd(src.temperatures.dhw, 2);
   dst["temperatures"]["exhaust"] = roundd(src.temperatures.exhaust, 2);
+
+  dst["cascadeControl"]["input"] = src.cascadeControl.input;
+  dst["cascadeControl"]["output"] = src.cascadeControl.output;
 
   dst["parameters"]["heatingEnabled"] = src.parameters.heatingEnabled;
   dst["parameters"]["heatingMinTemp"] = src.parameters.heatingMinTemp;

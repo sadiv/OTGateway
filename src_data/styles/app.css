@@ -25,9 +25,9 @@
     --pico-block-spacing-horizontal: calc(var(--pico-spacing) * 1.5);
   }
 
-	.container {
-		max-width: 1000px;
-	}
+  .container {
+    max-width: 1000px;
+  }
 }
 
 @media (min-width: 1536px) {
@@ -36,89 +36,82 @@
     --pico-block-spacing-horizontal: calc(var(--pico-spacing) * 1.75);
   }
 
-	.container {
-		max-width: 1000px;
-	}
+  .container {
+    max-width: 1000px;
+  }
 }
 
-header, main, footer {
-	padding-top: 1rem !important;
-	padding-bottom: 1rem !important;
+header,
+main,
+footer {
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
 }
 
 article {
-	margin-bottom: 1rem;
+  margin-bottom: 1rem;
 }
 
 footer {
-	text-align: center;
+  text-align: center;
 }
 
-nav li a:has(> div.logo) {
-	margin-bottom: 0;
+/*nav li a:has(> div.logo) {
+  margin-bottom: 0;
+}*/
+nav li :where(a,[role=link]) {
+  margin: 0;
 }
 
-details > div {
-	padding: 0 var(--pico-form-element-spacing-horizontal);
+details>div {
+  padding: 0 var(--pico-form-element-spacing-horizontal);
 }
 
 pre {
-	padding: 0.5rem;
+  padding: 0.5rem;
 }
 
 
 .hidden {
-	display: none !important;
+  display: none !important;
 }
 
 button.success {
-	background-color: var(--pico-form-element-valid-border-color);
-	border-color: var(--pico-form-element-valid-border-color);
+  background-color: var(--pico-form-element-valid-border-color);
+  border-color: var(--pico-form-element-valid-border-color);
 }
 
 button.failed {
-	background-color: var(--pico-form-element-invalid-border-color);
-	border-color: var(--pico-form-element-invalid-border-color);
+  background-color: var(--pico-form-element-invalid-border-color);
+  border-color: var(--pico-form-element-invalid-border-color);
 }
 
 tr.network:hover {
-	--pico-background-color: var(--pico-primary-focus);
-	cursor: pointer;
-}
-
-.greatSignal {
-	background-color: var(--pico-form-element-valid-border-color);
-}
-
-.normalSignal {
-	background-color: #e48500;
-}
-
-.badSignal {
-	background-color: var(--pico-form-element-invalid-border-color);
+  --pico-background-color: var(--pico-primary-focus);
+  cursor: pointer;
 }
 
 .primary {
-	border: 0.25rem solid var(--pico-form-element-invalid-border-color);
-	padding: 1rem;
-	margin-bottom: 1rem;
+  border: 0.25rem solid var(--pico-form-element-invalid-border-color);
+  padding: 1rem;
+  margin-bottom: 1rem;
 }
 
 .logo {
-	display: inline-block;
-	padding: calc(var(--pico-nav-link-spacing-vertical) - var(--pico-border-width) * 2) var(--pico-nav-link-spacing-horizontal);
-	vertical-align: baseline;
-	line-height: var(--pico-line-height);
-	background-color: var(--pico-code-kbd-background-color);
-	border-radius: var(--pico-border-radius);
+  display: inline-block;
+  padding: calc(var(--pico-nav-link-spacing-vertical) - var(--pico-border-width) * 2) var(--pico-nav-link-spacing-horizontal);
+  vertical-align: baseline;
+  line-height: var(--pico-line-height);
+  background-color: var(--pico-code-kbd-background-color);
+  border-radius: var(--pico-border-radius);
   color: var(--pico-code-kbd-color);
   font-weight: bolder;
-	font-size: 1.3rem;
+  font-size: 1.3rem;
   font-family: var(--pico-font-family-monospace);
 }
 
 .thermostat {
-	display: grid;
+  display: grid;
   grid-template-columns: 0.5fr 2fr 0.5fr;
   grid-template-rows: 0.25fr 1fr 0.25fr;
   gap: 0px 0px;
@@ -130,8 +123,8 @@ tr.network:hover {
     "thermostat-minus thermostat-temp thermostat-plus"
     "thermostat-control thermostat-control thermostat-control";
 
-	border: .25rem solid var(--pico-blockquote-border-color);
-	padding: 0.5rem;
+  border: .25rem solid var(--pico-blockquote-border-color);
+  padding: 0.5rem;
 }
 
 .thermostat-header {
@@ -139,14 +132,14 @@ tr.network:hover {
   align-self: end;
   grid-area: thermostat-header;
 
-	font-size: 1rem;
+  font-size: 1rem;
   font-weight: bold;
   border-bottom: .25rem solid var(--pico-primary-hover-border);
-	margin: 0 0 1rem 0;
+  margin: 0 0 1rem 0;
 }
 
 .thermostat-temp {
-	display: grid;
+  display: grid;
   grid-template-columns: 1fr;
   grid-template-rows: 1fr 0.5fr;
   gap: 0px 0px;
@@ -162,7 +155,7 @@ tr.network:hover {
   align-self: center;
   grid-area: thermostat-temp-target;
 
-	font-weight: bold;
+  font-weight: bold;
   font-size: 1.75rem;
 }
 
@@ -171,7 +164,7 @@ tr.network:hover {
   align-self: start;
   grid-area: thermostat-temp-current;
 
-	color: var(--pico-secondary);
+  color: var(--pico-secondary);
   font-size: 0.85rem;
 }
 
@@ -192,5 +185,19 @@ tr.network:hover {
   align-self: start;
   grid-area: thermostat-control;
 
-	margin: 1.25rem 0;
+  margin: 1.25rem 0;
+}
+
+[class*=" icons-"],
+[class=icons],
+[class^=icons-] {
+  font-size: 1.35rem;
+}
+
+*:has(> [class*=" icons-"], > [class=icons], > [class^=icons-]):has(+ * > [class*=" icons-"], + * > [class=icons], + * > [class^=icons-]) {
+  margin: 0 0.5rem 0 0;
+}
+
+[data-tooltip]:has(> [class*=" icons-"], > [class=icons], > [class^=icons-]) {
+  border: 0 !important;
 }

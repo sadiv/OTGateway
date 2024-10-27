@@ -22,8 +22,6 @@ protected:
   bool isInitialized = false;
   unsigned long initializedTime = 0;
   unsigned int initializedMemberIdCode = 0;
-  byte dhwFlowRateMultiplier = 1;
-  byte pressureMultiplier = 1;
   bool pump = true;
   unsigned long lastSuccessResponse = 0;
   unsigned long prevUpdateNonEssentialVars = 0;
@@ -31,18 +29,19 @@ protected:
   unsigned long heatingSetTempTime = 0;
   byte configuredRxLedGpio = GPIO_IS_NOT_CONFIGURED;
 
-
-  const char* getTaskName() {
+  #if defined(ARDUINO_ARCH_ESP32)
+  const char* getTaskName() override {
     return "OpenTherm";
   }
   
-  int getTaskCore() {
+  BaseType_t getTaskCore() override {
     return 1;
   }
 
-  int getTaskPriority() {
+  int getTaskPriority() override {
     return 5;
   }
+  #endif
 
   void setup() {
     if (settings.system.unitSystem != UnitSystem::METRIC) {
@@ -60,7 +59,12 @@ protected:
     }
 
     if (!GPIO_IS_VALID(settings.opentherm.inGpio) || !GPIO_IS_VALID(settings.opentherm.outGpio)) {
-      Log.swarningln(FPSTR(L_OT), F("Not started. GPIO IN: %hhu or GPIO OUT: %hhu is not valid"), settings.opentherm.inGpio, settings.opentherm.outGpio);
+      Log.swarningln(
+        FPSTR(L_OT),
+        F("Not started. GPIO IN: %hhu or GPIO OUT: %hhu is not valid"),
+        settings.opentherm.inGpio,
+        settings.opentherm.outGpio
+      );
       return;
     }
 
@@ -116,6 +120,7 @@ protected:
       return;
     }
 
+    // RX LED GPIO setup
     if (settings.opentherm.rxLedGpio != this->configuredRxLedGpio) {
       if (this->configuredRxLedGpio != GPIO_IS_NOT_CONFIGURED) {
         digitalWrite(this->configuredRxLedGpio, LOW);
@@ -131,13 +136,23 @@ protected:
       }
     }
 
-    bool heatingEnabled = (vars.states.emergency || settings.heating.enable) && this->pump && this->isReady();
+    bool heatingEnabled = (vars.states.emergency || settings.heating.enable) && this->pump && vars.cascadeControl.input && this->isReady();
     bool heatingCh2Enabled = settings.opentherm.heatingCh2Enabled;
     if (settings.opentherm.heatingCh1ToCh2) {
       heatingCh2Enabled = heatingEnabled;
 
     } else if (settings.opentherm.dhwToCh2) {
       heatingCh2Enabled = settings.opentherm.dhwPresent && settings.dhw.enable;
+    }
+
+    // Set boiler status LB
+    // Some boilers require this, although this is against protocol
+    uint8_t statusLb = 0;
+
+    // Immergas fix
+    // https://arduino.ru/forum/programmirovanie/termostat-opentherm-na-esp8266?page=15#comment-649392
+    if (settings.opentherm.immergasFix) {
+      statusLb = 0xCA;
     }
 
     unsigned long response = this->instance->setBoilerStatus(
@@ -147,11 +162,16 @@ protected:
       settings.opentherm.nativeHeatingControl,
       heatingCh2Enabled,
       settings.opentherm.summerWinterMode,
-      settings.opentherm.dhwBlocking
+      settings.opentherm.dhwBlocking,
+      statusLb
     );
 
     if (!CustomOpenTherm::isValidResponse(response)) {
-      Log.swarningln(FPSTR(L_OT), F("Invalid response after setBoilerStatus: %s"), CustomOpenTherm::statusToString(this->instance->getLastResponseStatus()));
+      Log.swarningln(
+        FPSTR(L_OT),
+        F("Failed receive boiler status: %s"),
+        CustomOpenTherm::statusToString(this->instance->getLastResponseStatus())
+      );
     }
 
     if (!vars.states.otStatus && millis() - this->lastSuccessResponse < 1150) {
@@ -182,8 +202,6 @@ protected:
       this->isInitialized = true;
       this->initializedTime = millis();
       this->initializedMemberIdCode = settings.opentherm.memberIdCode;
-      this->dhwFlowRateMultiplier = 1;
-      this->pressureMultiplier = 1;
       this->initialize();
     }
 
@@ -199,46 +217,83 @@ protected:
     vars.states.fault = CustomOpenTherm::isFault(response);
     vars.states.diagnostic = CustomOpenTherm::isDiagnostic(response);
 
+    Log.snoticeln(
+      FPSTR(L_OT),
+      F("Received boiler status. Heating: %hhu; DHW: %hhu; flame: %hhu; fault: %hhu; diag: %hhu"),
+      vars.states.heating, vars.states.dhw, vars.states.flame, vars.states.fault, vars.states.diagnostic
+    );
+
     // These parameters will be updated every minute
     if (millis() - this->prevUpdateNonEssentialVars > 60000) {
-      if (!heatingEnabled && settings.opentherm.modulationSyncWithHeating) {
-        if (setMaxModulationLevel(0)) {
-          Log.snoticeln(FPSTR(L_OT_HEATING), F("Set max modulation 0% (off)"));
+      if (this->updateMinModulationLevel()) {
+        Log.snoticeln(
+          FPSTR(L_OT),
+          F("Received min modulation: %hhu%%, max power: %hhu kW"),
+          vars.parameters.minModulation,
+          vars.parameters.maxPower
+        );
+        
+        if (settings.opentherm.maxModulation < vars.parameters.minModulation) {
+          settings.opentherm.maxModulation = vars.parameters.minModulation;
+          fsSettings.update();
+          Log.swarningln(FPSTR(L_SETTINGS_OT), F("Updated min modulation: %hhu%%"), settings.opentherm.maxModulation);
+        }
 
-        } else {
-          Log.swarningln(FPSTR(L_OT_HEATING), F("Failed set max modulation 0% (off)"));
+        if (fabsf(settings.opentherm.maxPower) < 0.1f && vars.parameters.maxPower > 0) {
+          settings.opentherm.maxPower = vars.parameters.maxPower;
+          fsSettings.update();
+          Log.swarningln(FPSTR(L_SETTINGS_OT), F("Updated max power: %.2f kW"), settings.opentherm.maxPower);
         }
 
       } else {
-        if (setMaxModulationLevel(settings.heating.maxModulation)) {
-          Log.snoticeln(FPSTR(L_OT_HEATING), F("Set max modulation %hhu%%"), settings.heating.maxModulation);
+        Log.swarningln(FPSTR(L_OT), F("Failed receive min modulation and max power"));
+      }
+
+      if (!heatingEnabled && settings.opentherm.modulationSyncWithHeating) {
+        if (this->setMaxModulationLevel(0)) {
+          Log.snoticeln(FPSTR(L_OT), F("Set max modulation: 0% (off)"));
 
         } else {
-          Log.swarningln(FPSTR(L_OT_HEATING), F("Failed set max modulation %hhu%%"), settings.heating.maxModulation);
+          Log.swarningln(FPSTR(L_OT), F("Failed set max modulation: 0% (off)"));
+        }
+
+      } else {
+        if (this->setMaxModulationLevel(settings.opentherm.maxModulation)) {
+          Log.snoticeln(FPSTR(L_OT), F("Set max modulation: %hhu%%"), settings.opentherm.maxModulation);
+
+        } else {
+          Log.swarningln(FPSTR(L_OT), F("Failed set max modulation: %hhu%%"), settings.opentherm.maxModulation);
         }
       }
 
 
       // Get DHW min/max temp (if necessary)
       if (settings.opentherm.dhwPresent && settings.opentherm.getMinMaxTemp) {
-        if (updateMinMaxDhwTemp()) {
+        if (this->updateMinMaxDhwTemp()) {
+          Log.snoticeln(
+            FPSTR(L_OT_DHW),
+            F("Received min temp: %hhu, max temp: %hhu"),
+            vars.parameters.dhwMinTemp,
+            vars.parameters.dhwMaxTemp
+          );
+
           if (settings.dhw.minTemp < vars.parameters.dhwMinTemp) {
             settings.dhw.minTemp = vars.parameters.dhwMinTemp;
             fsSettings.update();
-            Log.snoticeln(FPSTR(L_OT_DHW), F("Updated min temp: %hhu"), settings.dhw.minTemp);
+            Log.swarningln(FPSTR(L_SETTINGS_DHW), F("Updated min temp: %hhu"), settings.dhw.minTemp);
           }
 
           if (settings.dhw.maxTemp > vars.parameters.dhwMaxTemp) {
             settings.dhw.maxTemp = vars.parameters.dhwMaxTemp;
             fsSettings.update();
-            Log.snoticeln(FPSTR(L_OT_DHW), F("Updated max temp: %hhu"), settings.dhw.maxTemp);
+            Log.swarningln(FPSTR(L_SETTINGS_DHW), F("Updated max temp: %hhu"), settings.dhw.maxTemp);
           }
 
         } else {
           vars.parameters.dhwMinTemp = convertTemp(DEFAULT_DHW_MIN_TEMP, UnitSystem::METRIC, settings.system.unitSystem);
           vars.parameters.dhwMaxTemp = convertTemp(DEFAULT_DHW_MAX_TEMP, UnitSystem::METRIC, settings.system.unitSystem);
 
-          Log.swarningln(FPSTR(L_OT_DHW), F("Failed get min/max temp"));
+          Log.swarningln(FPSTR(L_OT_DHW), F("Failed receive min/max temp"));
         }
 
         if (settings.dhw.minTemp >= settings.dhw.maxTemp) {
@@ -251,24 +306,31 @@ protected:
 
       // Get heating min/max temp
       if (settings.opentherm.getMinMaxTemp) {
-        if (updateMinMaxHeatingTemp()) {
+        if (this->updateMinMaxHeatingTemp()) {
+          Log.snoticeln(
+            FPSTR(L_OT_HEATING),
+            F("Received min temp: %hhu, max temp: %hhu"),
+            vars.parameters.heatingMinTemp,
+            vars.parameters.heatingMaxTemp
+          );
+
           if (settings.heating.minTemp < vars.parameters.heatingMinTemp) {
             settings.heating.minTemp = vars.parameters.heatingMinTemp;
             fsSettings.update();
-            Log.snoticeln(FPSTR(L_OT_HEATING), F("Updated min temp: %hhu"), settings.heating.minTemp);
+            Log.swarningln(FPSTR(L_SETTINGS_HEATING), F("Updated min temp: %hhu"), settings.heating.minTemp);
           }
 
           if (settings.heating.maxTemp > vars.parameters.heatingMaxTemp) {
             settings.heating.maxTemp = vars.parameters.heatingMaxTemp;
             fsSettings.update();
-            Log.snoticeln(FPSTR(L_OT_HEATING), F("Updated max temp: %hhu"), settings.heating.maxTemp);
+            Log.swarningln(FPSTR(L_SETTINGS_HEATING), F("Updated max temp: %hhu"), settings.heating.maxTemp);
           }
           
         } else {
           vars.parameters.heatingMinTemp = convertTemp(DEFAULT_HEATING_MIN_TEMP, UnitSystem::METRIC, settings.system.unitSystem);
           vars.parameters.heatingMaxTemp = convertTemp(DEFAULT_HEATING_MAX_TEMP, UnitSystem::METRIC, settings.system.unitSystem);
 
-          Log.swarningln(FPSTR(L_OT_HEATING), F("Failed get min/max temp"));
+          Log.swarningln(FPSTR(L_OT_HEATING), F("Failed receive min/max temp"));
         }
       }
 
@@ -278,17 +340,67 @@ protected:
         fsSettings.update();
       }
 
-      // Get outdoor temp (if necessary)
-      if (settings.sensors.outdoor.type == SensorType::BOILER) {
-        updateOutsideTemp();
-      }
-
       // Get fault code (if necessary)
       if (vars.states.fault) {
-        updateFaultCode();
+        if (this->updateFaultCode()) {
+          Log.snoticeln(
+            FPSTR(L_OT),
+            F("Received fault code: %hhu (0x%02X)"),
+            vars.sensors.faultCode,
+            vars.sensors.faultCode
+          );
+
+        } else {
+          vars.sensors.faultCode = 0;
+
+          Log.swarningln(FPSTR(L_OT), F("Failed receive fault code"));
+        }
+        
+      } else if (vars.sensors.faultCode != 0) {
+        vars.sensors.faultCode = 0;
       }
 
-      updatePressure();
+      // Get diagnostic code (if necessary)
+      if (vars.states.fault || vars.states.diagnostic) {
+        if (this->updateDiagCode()) {
+          Log.snoticeln(
+            FPSTR(L_OT),
+            F("Received diag code: %hu (0x%02X)"),
+            vars.sensors.diagnosticCode,
+            vars.sensors.diagnosticCode
+          );
+
+        } else {
+          vars.sensors.diagnosticCode = 0;
+
+          Log.swarningln(FPSTR(L_OT), F("Failed receive diag code"));
+        }
+        
+      } else if (vars.sensors.diagnosticCode != 0) {
+        vars.sensors.diagnosticCode = 0;
+      }
+
+      // If filtering is disabled, then it is enough to
+      // update these parameters once a minute
+      if (!settings.opentherm.filterNumValues.enable) {
+        // Get outdoor temp (if necessary)
+        if (settings.sensors.outdoor.type == SensorType::BOILER) {
+          if (this->updateOutdoorTemp()) {
+            Log.snoticeln(FPSTR(L_OT), F("Received outdoor temp: %.2f"), vars.temperatures.outdoor);
+
+          } else {
+            Log.swarningln(FPSTR(L_OT), F("Failed receive outdoor temp"));
+          }
+        }
+        
+        // Get pressure
+        if (this->updatePressure()) {
+          Log.snoticeln(FPSTR(L_OT), F("Received pressure: %.2f"), vars.sensors.pressure);
+
+        } else {
+          Log.swarningln(FPSTR(L_OT), F("Failed receive pressure"));
+        }
+      }
 
       this->prevUpdateNonEssentialVars = millis();
     }
@@ -296,16 +408,51 @@ protected:
 
     // Get current modulation level (if necessary)
     if (vars.states.flame) {
-      updateModulationLevel();
+      if (this->updateModulationLevel()) {
+        if (settings.opentherm.maxPower > 0.1f) {
+          float modulatedPower = settings.opentherm.maxPower - settings.opentherm.minPower;
+          vars.sensors.power = settings.opentherm.minPower + (modulatedPower / 100.0f * vars.sensors.modulation);
+
+        } else {
+          vars.sensors.power = 0.0f;
+        }
+        
+        Log.snoticeln(
+          FPSTR(L_OT),
+          F("Received modulation level: %.2f%%, power: %.2f of %.2f kW (min: %.2f kW)"),
+          vars.sensors.modulation,
+          vars.sensors.power,
+          settings.opentherm.maxPower,
+          settings.opentherm.minPower
+        );
+
+      } else {
+        vars.sensors.modulation = 0;
+        vars.sensors.power = 0;
+
+        Log.swarningln(FPSTR(L_OT), F("Failed receive modulation level"));
+      }
 
     } else {
       vars.sensors.modulation = 0;
+      vars.sensors.power = 0;
     }
 
     // Update DHW sensors (if necessary)
     if (settings.opentherm.dhwPresent) {
-      updateDhwTemp();
-      updateDhwFlowRate();
+      if (this->updateDhwTemp()) {
+        Log.snoticeln(FPSTR(L_OT_DHW), F("Received temp: %.2f"), vars.temperatures.dhw);
+
+      } else {
+        Log.swarningln(FPSTR(L_OT_DHW), F("Failed receive temp"));
+      }
+
+      if (this->updateDhwFlowRate()) {
+        Log.snoticeln(FPSTR(L_OT_DHW), F("Received flow rate: %.2f"), vars.sensors.dhwFlowRate);
+
+      } else {
+        Log.swarningln(FPSTR(L_OT_DHW), F("Failed receive flow rate"));
+      }
 
     } else {
       vars.temperatures.dhw = 0.0f;
@@ -313,13 +460,50 @@ protected:
     }
 
     // Get current heating temp
-    updateHeatingTemp();
+    if (this->updateHeatingTemp()) {
+      Log.snoticeln(FPSTR(L_OT_HEATING), F("Received temp: %.2f"), vars.temperatures.heating);
+
+    } else {
+      Log.swarningln(FPSTR(L_OT_HEATING), F("Failed receive temp"));
+    }
 
     // Get heating return temp
-    updateHeatingReturnTemp();
+    if (this->updateHeatingReturnTemp()) {
+      Log.snoticeln(FPSTR(L_OT_HEATING), F("Received return temp: %.2f"), vars.temperatures.heatingReturn);
+
+    } else {
+      Log.swarningln(FPSTR(L_OT_HEATING), F("Failed receive return temp"));
+    }
 
     // Get exhaust temp
-    updateExhaustTemp();
+    if (this->updateExhaustTemp()) {
+      Log.snoticeln(FPSTR(L_OT), F("Received exhaust temp: %.2f"), vars.temperatures.exhaust);
+
+    } else {
+      Log.swarningln(FPSTR(L_OT), F("Failed receive exhaust temp"));
+    }
+
+    // If filtering is enabled, these parameters
+    // must be updated every time.
+    if (settings.opentherm.filterNumValues.enable) {
+      // Get outdoor temp (if necessary)
+      if (settings.sensors.outdoor.type == SensorType::BOILER) {
+        if (this->updateOutdoorTemp()) {
+          Log.snoticeln(FPSTR(L_OT), F("Received outdoor temp: %.2f"), vars.temperatures.outdoor);
+
+        } else {
+          Log.swarningln(FPSTR(L_OT), F("Failed receive outdoor temp"));
+        }
+      }
+      
+      // Get pressure
+      if (this->updatePressure()) {
+        Log.snoticeln(FPSTR(L_OT), F("Received pressure: %.2f"), vars.sensors.pressure);
+
+      } else {
+        Log.swarningln(FPSTR(L_OT), F("Failed receive pressure"));
+      }
+    }
 
 
     // Fault reset action
@@ -469,39 +653,46 @@ protected:
   void initialize() {
     // Not all boilers support these, only try once when the boiler becomes connected
     if (this->updateSlaveVersion()) {
-      Log.straceln(FPSTR(L_OT), F("Slave version: %u, type: %u"), vars.parameters.slaveVersion, vars.parameters.slaveType);
+      Log.snoticeln(FPSTR(L_OT), F("Received slave version: %u, type: %u"), vars.parameters.slaveVersion, vars.parameters.slaveType);
 
     } else {
-      Log.swarningln(FPSTR(L_OT), F("Get slave version failed"));
+      Log.swarningln(FPSTR(L_OT), F("Failed receive slave version"));
     }
 
     // 0x013F
     if (this->setMasterVersion(0x3F, 0x01)) {
-      Log.straceln(FPSTR(L_OT), F("Master version: %u, type: %u"), vars.parameters.masterVersion, vars.parameters.masterType);
+      Log.snoticeln(FPSTR(L_OT), F("Set master version: %u, type: %u"), vars.parameters.masterVersion, vars.parameters.masterType);
       
     } else {
-      Log.swarningln(FPSTR(L_OT), F("Set master version failed"));
+      Log.swarningln(FPSTR(L_OT), F("Failed set master version"));
     }
 
     if (this->updateSlaveOtVersion()) {
-      Log.straceln(FPSTR(L_OT), F("Slave OT version: %f"), vars.parameters.slaveOtVersion);
+      Log.snoticeln(FPSTR(L_OT), F("Received slave OT version: %f"), vars.parameters.slaveOtVersion);
 
     } else {
-      Log.swarningln(FPSTR(L_OT), F("Get slave OT version failed"));
+      Log.swarningln(FPSTR(L_OT), F("Failed receive slave OT version"));
+    }
+
+    if (this->setMasterOtVersion(2.2f)) {
+      Log.snoticeln(FPSTR(L_OT), F("Set master OT version: %f"), vars.parameters.masterOtVersion);
+
+    } else {
+      Log.swarningln(FPSTR(L_OT), F("Failed set master OT version"));
     }
 
     if (this->updateSlaveConfig()) {
-      Log.straceln(FPSTR(L_OT), F("Slave member id: %u, flags: %u"), vars.parameters.slaveMemberId, vars.parameters.slaveFlags);
+      Log.snoticeln(FPSTR(L_OT), F("Received slave member id: %u, flags: %u"), vars.parameters.slaveMemberId, vars.parameters.slaveFlags);
 
     } else {
-      Log.swarningln(FPSTR(L_OT), F("Get slave config failed"));
+      Log.swarningln(FPSTR(L_OT), F("Failed receive slave config"));
     }
 
     if (this->setMasterConfig(settings.opentherm.memberIdCode & 0xFF, (settings.opentherm.memberIdCode & 0xFFFF) >> 8)) {
-      Log.straceln(FPSTR(L_OT), F("Master member id: %u, flags: %u"), vars.parameters.masterMemberId, vars.parameters.masterFlags);
+      Log.snoticeln(FPSTR(L_OT), F("Set master member id: %u, flags: %u"), vars.parameters.masterMemberId, vars.parameters.masterFlags);
       
     } else {
-      Log.swarningln(FPSTR(L_OT), F("Set master config failed"));
+      Log.swarningln(FPSTR(L_OT), F("Failed set master config"));
     }
   }
 
@@ -725,7 +916,7 @@ protected:
     return CustomOpenTherm::isValidResponse(response);
   }
 
-  bool updateOutsideTemp() {
+  bool updateOutdoorTemp() {
     unsigned long response = this->instance->sendRequest(CustomOpenTherm::buildRequest(
       OpenThermRequestType::READ_DATA,
       OpenThermMessageID::Toutside,
@@ -736,11 +927,18 @@ protected:
       return false;
     }
     
-    vars.temperatures.outdoor = settings.sensors.outdoor.offset + convertTemp(
+    float value = settings.sensors.outdoor.offset + convertTemp(
       CustomOpenTherm::getFloat(response),
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.temperatures.outdoor) >= 0.1f) {
+      vars.temperatures.outdoor += (value - vars.temperatures.outdoor) * settings.opentherm.filterNumValues.factor;
+      
+    } else {
+      vars.temperatures.outdoor = value;
+    }
 
     return true;
   }
@@ -761,11 +959,18 @@ protected:
       return false;
     }
 
-    vars.temperatures.exhaust = convertTemp(
+    value = convertTemp(
       value,
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.temperatures.exhaust) >= 0.1f) {
+      vars.temperatures.exhaust += (value - vars.temperatures.exhaust) * settings.opentherm.filterNumValues.factor;
+      
+    } else {
+      vars.temperatures.exhaust = value;
+    }
 
     return true;
   }
@@ -786,11 +991,18 @@ protected:
       return false;
     }
 
-    vars.temperatures.heating = convertTemp(
+    value = convertTemp(
       value,
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.temperatures.heating) >= 0.1f) {
+      vars.temperatures.heating += (value - vars.temperatures.heating) * settings.opentherm.filterNumValues.factor;
+
+    } else {
+      vars.temperatures.heating = value;
+    }
 
     return true;
   }
@@ -806,11 +1018,19 @@ protected:
       return false;
     }
 
-    vars.temperatures.heatingReturn = convertTemp(
+    float value = convertTemp(
       CustomOpenTherm::getFloat(response),
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.temperatures.heatingReturn) >= 0.1f) {
+      vars.temperatures.heatingReturn += (value - vars.temperatures.heatingReturn) * settings.opentherm.filterNumValues.factor;
+      
+    } else {
+      vars.temperatures.heatingReturn = value;
+    }
+    
 
     return true;
   }
@@ -832,11 +1052,18 @@ protected:
       return false;
     }
 
-    vars.temperatures.dhw = convertTemp(
+    value = convertTemp(
       value,
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.temperatures.dhw) >= 0.1f) {
+      vars.temperatures.dhw += (value - vars.temperatures.dhw) * settings.opentherm.filterNumValues.factor;
+      
+    } else {
+      vars.temperatures.dhw = value;
+    }
 
     return true;
   }
@@ -853,15 +1080,17 @@ protected:
     }
 
     float value = CustomOpenTherm::getFloat(response);
-    if (this->dhwFlowRateMultiplier != 10 && value > convertVolume(16, UnitSystem::METRIC, settings.opentherm.unitSystem)) {
-      this->dhwFlowRateMultiplier = 10;
+    if (value < 0 || value > convertVolume(16, UnitSystem::METRIC, settings.opentherm.unitSystem)) {
+      return false;
     }
 
-    vars.sensors.dhwFlowRate = convertVolume(
-      value / this->dhwFlowRateMultiplier,
+    value = convertVolume(
+      value * settings.opentherm.dhwFlowRateFactor,
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    vars.sensors.dhwFlowRate = value > 0.09f ? value : 0.0f;
     
     return true;
   }
@@ -881,6 +1110,21 @@ protected:
     return true;
   }
 
+  bool updateDiagCode() {
+    unsigned long response = this->instance->sendRequest(CustomOpenTherm::buildRequest(
+      OpenThermRequestType::READ_DATA,
+      OpenThermMessageID::OEMDiagnosticCode,
+      0
+    ));
+
+    if (!CustomOpenTherm::isValidResponse(response)) {
+      return false;
+    }
+
+    vars.sensors.diagnosticCode = CustomOpenTherm::getUInt(response);
+    return true;
+  }
+
   bool updateModulationLevel() {
     unsigned long response = this->instance->sendRequest(CustomOpenTherm::buildRequest(
       OpenThermRequestType::READ_DATA,
@@ -892,7 +1136,34 @@ protected:
       return false;
     }
 
-    vars.sensors.modulation = CustomOpenTherm::getFloat(response);
+    float value = CustomOpenTherm::getFloat(response);
+    if (value < 0) {
+      return false;
+    }
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.sensors.modulation) >= 0.1f) {
+      vars.sensors.modulation += (value - vars.sensors.modulation) * settings.opentherm.filterNumValues.factor;
+      
+    } else {
+      vars.sensors.modulation = value;
+    }
+
+    return true;
+  }
+
+  bool updateMinModulationLevel() {
+    unsigned long response = this->instance->sendRequest(CustomOpenTherm::buildRequest(
+      OpenThermRequestType::READ_DATA,
+      OpenThermMessageID::MaxCapacityMinModLevel,
+      0
+    ));
+
+    if (!CustomOpenTherm::isValidResponse(response)) {
+      return false;
+    }
+
+    vars.parameters.minModulation = response & 0xFF;
+    vars.parameters.maxPower = (response & 0xFFFF) >> 8;
 
     return true;
   }
@@ -909,15 +1180,22 @@ protected:
     }
 
     float value = CustomOpenTherm::getFloat(response);
-    if (this->pressureMultiplier != 10 && value > convertPressure(5, UnitSystem::METRIC, settings.opentherm.unitSystem)) {
-      this->pressureMultiplier = 10;
+    if (value < 0 || value > convertPressure(5, UnitSystem::METRIC, settings.opentherm.unitSystem)) {
+      return false;
     }
 
-    vars.sensors.pressure = convertPressure(
-      value / this->pressureMultiplier,
+    value = convertPressure(
+      value * settings.opentherm.pressureFactor,
       settings.opentherm.unitSystem,
       settings.system.unitSystem
     );
+
+    if (settings.opentherm.filterNumValues.enable && fabs(vars.sensors.pressure) >= 0.1f) {
+      vars.sensors.pressure += (value - vars.sensors.pressure) * settings.opentherm.filterNumValues.factor;
+      
+    } else {
+      vars.sensors.pressure = value;
+    }
 
     return true;
   }

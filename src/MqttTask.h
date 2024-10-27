@@ -81,17 +81,19 @@ protected:
   bool connected = false;
   bool newConnection = false;
 
-  const char* getTaskName() {
+  #if defined(ARDUINO_ARCH_ESP32)
+  const char* getTaskName() override {
     return "Mqtt";
   }
   
-  /*int getTaskCore() {
+  /*BaseType_t getTaskCore() override {
     return 1;
   }*/
 
-  int getTaskPriority() {
+  int getTaskPriority() override {
     return 2;
   }
+  #endif
 
   inline bool isReadyForSend() {
     return millis() - this->connectedTime > this->readyForSendTime;
@@ -161,7 +163,7 @@ protected:
 
     // ha helper settings
     this->haHelper->setDevicePrefix(settings.mqtt.prefix);
-    this->haHelper->setDeviceVersion(PROJECT_VERSION);
+    this->haHelper->setDeviceVersion(BUILD_VERSION);
     this->haHelper->setDeviceModel(PROJECT_NAME);
     this->haHelper->setDeviceName(PROJECT_NAME);
     this->haHelper->setWriter(this->writer);
@@ -194,17 +196,6 @@ protected:
     } else if (!this->connected && this->client->connected()) {
       this->connected = true;
       this->onConnect();
-    }
-
-    if (settings.emergency.enable && settings.emergency.onMqttFault) {
-      if (!this->connected && !vars.states.emergency && millis() - this->disconnectedTime > (settings.emergency.tresholdTime * 1000)) {
-        vars.states.emergency = true;
-        Log.sinfoln(FPSTR(L_MQTT), F("Emergency mode enabled"));
-
-      } else if (this->connected && vars.states.emergency && millis() - this->connectedTime > 10000) {
-        vars.states.emergency = false;
-        Log.sinfoln(FPSTR(L_MQTT), F("Emergency mode disabled"));
-      }
     }
 
     if (!this->connected) {
@@ -279,7 +270,7 @@ protected:
       return;
     }
 
-    if (settings.system.debug) {
+    if (settings.system.logLevel >= TinyLogger::Level::TRACE) {
       Log.strace(FPSTR(L_MQTT_MSG), F("Topic: %s\r\n>  "), topic);
       if (Log.lock()) {
         for (size_t i = 0; i < length; i++) {
@@ -338,7 +329,6 @@ protected:
     this->haHelper->publishSensorBoilerHeatingMaxTemp(settings.system.unitSystem, false);
     this->haHelper->publishNumberHeatingMinTemp(settings.system.unitSystem, false);
     this->haHelper->publishNumberHeatingMaxTemp(settings.system.unitSystem, false);
-    this->haHelper->publishNumberHeatingMaxModulation(false);
 
     // pid
     this->haHelper->publishSwitchPid();
@@ -366,7 +356,9 @@ protected:
     // sensors
     this->haHelper->publishSensorModulation(false);
     this->haHelper->publishSensorPressure(settings.system.unitSystem, false);
+    this->haHelper->publishSensorPower();
     this->haHelper->publishSensorFaultCode();
+    this->haHelper->publishSensorDiagnosticCode();
     this->haHelper->publishSensorRssi(false);
     this->haHelper->publishSensorUptime(false);
 

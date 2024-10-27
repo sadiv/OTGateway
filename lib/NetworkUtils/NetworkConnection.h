@@ -5,8 +5,8 @@
   #include <WiFi.h>
 #endif
 
-namespace Network {
-  struct Connection {
+namespace NetworkUtils {
+  struct NetworkConnection {
     enum class Status {
       CONNECTED,
       CONNECTING,
@@ -27,6 +27,7 @@ namespace Network {
 
     static Status status;
     static DisconnectReason disconnectReason;
+    static uint8_t rawDisconnectReason;
     
     static void setup(bool useDhcp);
     static void setUseDhcp(bool value);

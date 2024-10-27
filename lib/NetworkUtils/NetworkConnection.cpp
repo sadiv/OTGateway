@@ -1,54 +1,58 @@
 #include "NetworkConnection.h"
-using namespace Network;
+using namespace NetworkUtils;
 
-void Connection::setup(bool useDhcp) {
+void NetworkConnection::setup(bool useDhcp) {
   setUseDhcp(useDhcp);
 
   #if defined(ARDUINO_ARCH_ESP8266)
-  wifi_set_event_handler_cb(Connection::onEvent);
+  wifi_set_event_handler_cb(NetworkConnection::onEvent);
   #elif defined(ARDUINO_ARCH_ESP32)
-  WiFi.onEvent(Connection::onEvent);
+  WiFi.onEvent(NetworkConnection::onEvent);
   #endif
 }
 
-void Connection::reset() {
+void NetworkConnection::reset() {
   status = Status::NONE;
+  rawDisconnectReason = 0;
   disconnectReason = DisconnectReason::NONE;
 }
 
-void Connection::setUseDhcp(bool value) {
+void NetworkConnection::setUseDhcp(bool value) {
   useDhcp = value;
 }
 
-Connection::Status Connection::getStatus() {
+NetworkConnection::Status NetworkConnection::getStatus() {
   return status;
 }
 
-Connection::DisconnectReason Connection::getDisconnectReason() {
+NetworkConnection::DisconnectReason NetworkConnection::getDisconnectReason() {
   return disconnectReason;
 }
 
 #if defined(ARDUINO_ARCH_ESP8266)
-void Connection::onEvent(System_Event_t *event) {
+void NetworkConnection::onEvent(System_Event_t *event) {
   switch (event->event) {
     case EVENT_STAMODE_CONNECTED:
       status = useDhcp ? Status::CONNECTING : Status::CONNECTED;
+      rawDisconnectReason = 0;
       disconnectReason = DisconnectReason::NONE;
-      
       break;
 
     case EVENT_STAMODE_GOT_IP:
       status = Status::CONNECTED;
+      rawDisconnectReason = 0;
       disconnectReason = DisconnectReason::NONE;
       break;
 
     case EVENT_STAMODE_DHCP_TIMEOUT:
       status = Status::DISCONNECTED;
+      rawDisconnectReason = 0;
       disconnectReason = DisconnectReason::DHCP_TIMEOUT;
       break;
 
     case EVENT_STAMODE_DISCONNECTED:
       status = Status::DISCONNECTED;
+      rawDisconnectReason = event->event_info.disconnected.reason;
       disconnectReason = convertDisconnectReason(event->event_info.disconnected.reason);
 
       // https://github.com/esp8266/Arduino/blob/d5eb265f78bff9deb7063d10030a02d021c8c66c/libraries/ESP8266WiFi/src/ESP8266WiFiGeneric.cpp#L231
@@ -63,6 +67,7 @@ void Connection::onEvent(System_Event_t *event) {
         auto& src = event->event_info.auth_change;
         if ((src.old_mode != AUTH_OPEN) && (src.new_mode == AUTH_OPEN)) {
           status = Status::DISCONNECTED;
+          rawDisconnectReason = 0;
           disconnectReason = DisconnectReason::OTHER;
 
           wifi_station_disconnect();
@@ -75,29 +80,31 @@ void Connection::onEvent(System_Event_t *event) {
   }
 }
 #elif defined(ARDUINO_ARCH_ESP32)
-void Connection::onEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+void NetworkConnection::onEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
       status = useDhcp ? Status::CONNECTING : Status::CONNECTED;
+      rawDisconnectReason = 0;
       disconnectReason = DisconnectReason::NONE;
-      
       break;
 
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
     case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
       status = Status::CONNECTED;
+      rawDisconnectReason = 0;
       disconnectReason = DisconnectReason::NONE;
       break;
 
     case ARDUINO_EVENT_WIFI_STA_LOST_IP:
       status = Status::DISCONNECTED;
+      rawDisconnectReason = 0;
       disconnectReason = DisconnectReason::DHCP_TIMEOUT;
       break;
 
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       status = Status::DISCONNECTED;
+      rawDisconnectReason = info.wifi_sta_disconnected.reason;
       disconnectReason = convertDisconnectReason(info.wifi_sta_disconnected.reason);
-
       break;
     
     default:
@@ -106,7 +113,7 @@ void Connection::onEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 #endif
 
-Connection::DisconnectReason Connection::convertDisconnectReason(uint8_t reason) {
+NetworkConnection::DisconnectReason NetworkConnection::convertDisconnectReason(uint8_t reason) {
   switch (reason) {
   #if defined(ARDUINO_ARCH_ESP8266)
     case REASON_BEACON_TIMEOUT:
@@ -145,6 +152,7 @@ Connection::DisconnectReason Connection::convertDisconnectReason(uint8_t reason)
   }
 }
 
-bool Connection::useDhcp = false;
-Connection::Status Connection::status = Status::NONE;
-Connection::DisconnectReason Connection::disconnectReason = DisconnectReason::NONE;
+bool NetworkConnection::useDhcp = false;
+NetworkConnection::Status NetworkConnection::status = Status::NONE;
+NetworkConnection::DisconnectReason NetworkConnection::disconnectReason = DisconnectReason::NONE;
+uint8_t NetworkConnection::rawDisconnectReason = 0;

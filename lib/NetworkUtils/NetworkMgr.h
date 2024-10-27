@@ -7,35 +7,35 @@
 #endif
 #include <NetworkConnection.h>
 
-namespace Network {
-  class Manager {
+namespace NetworkUtils {
+  class NetworkMgr {
   public:
     typedef std::function<void()> YieldCallback;
     typedef std::function<void(unsigned int)> DelayCallback;
 
-    Manager() {
-      Connection::setup(this->useDhcp);
+    NetworkMgr() {
+      NetworkConnection::setup(this->useDhcp);
       this->resetWifi();
     }
 
-    Manager* setYieldCallback(YieldCallback callback = nullptr) {
+    NetworkMgr* setYieldCallback(YieldCallback callback = nullptr) {
       this->yieldCallback = callback;
 
       return this;
     }
 
-    Manager* setDelayCallback(DelayCallback callback = nullptr) {
+    NetworkMgr* setDelayCallback(DelayCallback callback = nullptr) {
       this->delayCallback = callback;
 
       return this;
     }
 
-    Manager* setHostname(const char* value) {
+    NetworkMgr* setHostname(const char* value) {
       this->hostname = value;
       return this;
     }
 
-    Manager* setApCredentials(const char* ssid, const char* password = nullptr, byte channel = 0) {
+    NetworkMgr* setApCredentials(const char* ssid, const char* password = nullptr, byte channel = 0) {
       this->apName = ssid;
       this->apPassword = password;
       this->apChannel = channel;
@@ -43,7 +43,7 @@ namespace Network {
       return this;
     }
 
-    Manager* setStaCredentials(const char* ssid = nullptr, const char* password = nullptr, byte channel = 0) {
+    NetworkMgr* setStaCredentials(const char* ssid = nullptr, const char* password = nullptr, byte channel = 0) {
       this->staSsid = ssid;
       this->staPassword = password;
       this->staChannel = channel;
@@ -51,14 +51,14 @@ namespace Network {
       return this;
     }
 
-    Manager* setUseDhcp(bool value) {
+    NetworkMgr* setUseDhcp(bool value) {
       this->useDhcp = value;
-      Connection::setup(this->useDhcp);
+      NetworkConnection::setup(this->useDhcp);
 
       return this;
     }
 
-    Manager* setStaticConfig(const char* ip, const char* gateway, const char* subnet, const char* dns) {
+    NetworkMgr* setStaticConfig(const char* ip, const char* gateway, const char* subnet, const char* dns) {
       this->staticIp.fromString(ip);
       this->staticGateway.fromString(gateway);
       this->staticSubnet.fromString(subnet);
@@ -67,7 +67,7 @@ namespace Network {
       return this;
     }
 
-    Manager* setStaticConfig(IPAddress& ip, IPAddress& gateway, IPAddress& subnet, IPAddress& dns) {
+    NetworkMgr* setStaticConfig(IPAddress& ip, IPAddress& gateway, IPAddress& subnet, IPAddress& dns) {
       this->staticIp = ip;
       this->staticGateway = gateway;
       this->staticSubnet = subnet;
@@ -81,11 +81,11 @@ namespace Network {
     }
 
     bool isConnected() {
-      return this->isStaEnabled() && Connection::getStatus() == Connection::Status::CONNECTED;
+      return this->isStaEnabled() && NetworkConnection::getStatus() == NetworkConnection::Status::CONNECTED;
     }
 
     bool isConnecting() {
-      return this->isStaEnabled() && Connection::getStatus() == Connection::Status::CONNECTING;
+      return this->isStaEnabled() && NetworkConnection::getStatus() == NetworkConnection::Status::CONNECTING;
     }
 
     bool isStaEnabled() {
@@ -147,16 +147,19 @@ namespace Network {
     bool resetWifi() {
       // set policy manual for work 13 ch
       {
-        wifi_country_t country = {"CN", 1, 13, WIFI_COUNTRY_POLICY_MANUAL};
         #ifdef ARDUINO_ARCH_ESP8266
+        wifi_country_t country = {"CN", 1, 13, WIFI_COUNTRY_POLICY_AUTO};
         wifi_set_country(&country);
         #elif defined(ARDUINO_ARCH_ESP32)
+        const wifi_country_t country = {"CN", 1, 13, CONFIG_ESP32_PHY_MAX_WIFI_TX_POWER, WIFI_COUNTRY_POLICY_AUTO};
         esp_wifi_set_country(&country);
         #endif
       }
 
       WiFi.persistent(false);
+      #if !defined(ESP_ARDUINO_VERSION_MAJOR) || ESP_ARDUINO_VERSION_MAJOR < 3
       WiFi.setAutoConnect(false);
+      #endif
       WiFi.setAutoReconnect(false);
 
       #ifdef ARDUINO_ARCH_ESP8266
@@ -180,9 +183,9 @@ namespace Network {
 
       wifi_station_dhcpc_set_maxtry(5);
       #endif
-
-      #ifdef ARDUINO_ARCH_ESP32
-      // Nothing. Because memory leaks when turn off WiFi on ESP32, bug?
+      
+      #if defined(ARDUINO_ARCH_ESP32) && ESP_ARDUINO_VERSION_MAJOR < 3
+      // Nothing. Because memory leaks when turn off WiFi on ESP32 SDK < 3.0.0
       return true;
       #else
       return WiFi.mode(WIFI_OFF);
@@ -200,6 +203,7 @@ namespace Network {
 
       if (force && !this->isApEnabled()) {
         this->resetWifi();
+        NetworkConnection::reset();
 
       } else {
         /*#ifdef ARDUINO_ARCH_ESP8266
@@ -208,14 +212,14 @@ namespace Network {
         }
         #endif*/
 
-        WiFi.disconnect(false, true);
+        this->disconnect();
       }
 
       if (!this->hasStaCredentials()) {
         return false;
       }
 
-      this->delayCallback(200);
+      this->delayCallback(250);
 
       #ifdef ARDUINO_ARCH_ESP32
       if (this->setWifiHostname(this->hostname)) {
@@ -230,7 +234,7 @@ namespace Network {
         return false;
       }
 
-      this->delayCallback(200);
+      this->delayCallback(250);
 
       #ifdef ARDUINO_ARCH_ESP8266
       if (this->setWifiHostname(this->hostname)) {
@@ -240,36 +244,66 @@ namespace Network {
         Log.serrorln(FPSTR(L_NETWORK), F("Set hostname '%s': fail"), this->hostname);
       }
 
-      this->delayCallback(200);
+      this->delayCallback(250);
+      #endif
+
+      #ifdef ARDUINO_ARCH_ESP32
+      WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+      WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
       #endif
 
       if (!this->useDhcp) {
+        WiFi.begin(this->staSsid, this->staPassword, this->staChannel, nullptr, false);
         WiFi.config(this->staticIp, this->staticGateway, this->staticSubnet, this->staticDns);
-      }
+        WiFi.reconnect();
 
-      WiFi.begin(this->staSsid, this->staPassword, this->staChannel);
+      } else {
+        WiFi.begin(this->staSsid, this->staPassword, this->staChannel, nullptr, true);
+      }
 
       unsigned long beginConnectionTime = millis();
       while (millis() - beginConnectionTime < timeout) {
         this->delayCallback(100);
 
-        Connection::Status status = Connection::getStatus();
-        if (status != Connection::Status::CONNECTING && status != Connection::Status::NONE) {
-          return status == Connection::Status::CONNECTED;
+        NetworkConnection::Status status = NetworkConnection::getStatus();
+        if (status != NetworkConnection::Status::CONNECTING && status != NetworkConnection::Status::NONE) {
+          return status == NetworkConnection::Status::CONNECTED;
         }
       }
 
       return false;
     }
 
+    void disconnect() {
+      #ifdef ARDUINO_ARCH_ESP32
+      WiFi.disconnectAsync(false, true);
+
+      const unsigned long start = millis();
+      while (WiFi.isConnected() && (millis() - start) < 5000) {
+        this->delayCallback(100);
+      }
+      #else
+      WiFi.disconnect(false, true);
+      #endif
+    }
+
     void loop() {
-      if (this->isConnected() && !this->hasStaCredentials()) {
+      if (this->reconnectFlag) {
+        this->delayCallback(5000);
+
+        Log.sinfoln(FPSTR(L_NETWORK), F("Reconnecting..."));
+        this->reconnectFlag = false;
+        this->disconnect();
+        NetworkConnection::reset();
+        this->delayCallback(1000);
+
+      } else if (this->isConnected() && !this->hasStaCredentials()) {
         Log.sinfoln(FPSTR(L_NETWORK), F("Reset"));
         this->resetWifi();
-        Connection::reset();
-        this->delayCallback(200);
+        NetworkConnection::reset();
+        this->delayCallback(1000);
 
-      } else if (this->isConnected() && !this->reconnectFlag) {
+      } else if (this->isConnected()) {
         if (!this->connected) {
           this->connectedTime = millis();
           this->connected = true;
@@ -284,7 +318,7 @@ namespace Network {
         }
 
         if (this->isApEnabled() && millis() - this->connectedTime > this->reconnectInterval && !this->hasApClients()) {
-          Log.sinfoln(FPSTR(L_NETWORK), F("Stop AP because connected, start only STA"));
+          Log.sinfoln(FPSTR(L_NETWORK), F("Stop AP because STA connected"));
 
           WiFi.mode(WIFI_STA);
           return;
@@ -305,7 +339,7 @@ namespace Network {
           Log.sinfoln(
             FPSTR(L_NETWORK),
             F("Disconnected, reason: %d, uptime: %lu s."),
-            Connection::getDisconnectReason(),
+            NetworkConnection::getDisconnectReason(),
             (millis() - this->connectedTime) / 1000
           );
         }
@@ -327,16 +361,15 @@ namespace Network {
         } else if (this->isConnecting() && millis() - this->prevReconnectingTime > this->resetConnectionTimeout) {
           Log.swarningln(FPSTR(L_NETWORK), F("Connection timeout, reset wifi..."));
           this->resetWifi();
-          Connection::reset();
-          this->delayCallback(200);
+          NetworkConnection::reset();
+          this->delayCallback(250);
 
         } else if (!this->isConnecting() && this->hasStaCredentials() && (!this->prevReconnectingTime || millis() - this->prevReconnectingTime > this->reconnectInterval)) {
           Log.sinfoln(FPSTR(L_NETWORK), F("Try connect..."));
 
-          this->reconnectFlag = false;
-          Connection::reset();
+          NetworkConnection::reset();
           if (!this->connect(true, this->connectionTimeout)) {
-            Log.straceln(FPSTR(L_NETWORK), F("Connection failed. Status: %d, reason: %d"), Connection::getStatus(), Connection::getDisconnectReason());
+            Log.straceln(FPSTR(L_NETWORK), F("Connection failed. Status: %d, reason: %d, raw reason: %d"), NetworkConnection::getStatus(), NetworkConnection::getDisconnectReason(), NetworkConnection::rawDisconnectReason);
           }
 
           this->prevReconnectingTime = millis();
@@ -349,10 +382,10 @@ namespace Network {
     }
 
   protected:
-    const unsigned int reconnectInterval = 5000;
-    const unsigned int failedConnectTimeout = 120000;
-    const unsigned int connectionTimeout = 15000;
-    const unsigned int resetConnectionTimeout = 30000;
+    const unsigned int reconnectInterval = 15000;
+    const unsigned int failedConnectTimeout = 185000;
+    const unsigned int connectionTimeout = 5000;
+    const unsigned int resetConnectionTimeout = 90000;
 
     YieldCallback yieldCallback = []() {
       ::yield();

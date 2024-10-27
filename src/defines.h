@@ -1,5 +1,4 @@
 #define PROJECT_NAME                    "OpenTherm Gateway"
-#define PROJECT_VERSION                 "1.4.0-rc.24"
 #define PROJECT_REPO                    "https://github.com/Laxilef/OTGateway"
 
 #define MQTT_RECONNECT_INTERVAL         15000
@@ -23,12 +22,28 @@
 #define THERMOSTAT_INDOOR_MIN_TEMP      5
 #define THERMOSTAT_INDOOR_MAX_TEMP      30
 
-#ifndef USE_SERIAL
-  #define USE_SERIAL true
+#ifndef BUILD_VERSION
+  #define BUILD_VERSION                 "0.0.0"
 #endif
 
-#ifndef USE_TELNET
-  #define USE_TELNET true
+#ifndef BUILD_ENV
+  #define BUILD_ENV                     "undefined"
+#endif
+
+#ifndef DEFAULT_SERIAL_ENABLE
+  #define DEFAULT_SERIAL_ENABLE true
+#endif
+
+#ifndef DEFAULT_SERIAL_BAUD
+  #define DEFAULT_SERIAL_BAUD 115200
+#endif
+
+#ifndef DEFAULT_TELNET_ENABLE
+  #define DEFAULT_TELNET_ENABLE true
+#endif
+
+#ifndef DEFAULT_TELNET_PORT
+  #define DEFAULT_TELNET_PORT 23
 #endif
 
 #ifndef USE_BLE
@@ -55,8 +70,8 @@
   #define DEFAULT_STA_PASSWORD ""
 #endif
 
-#ifndef DEBUG_BY_DEFAULT
-  #define DEBUG_BY_DEFAULT false
+#ifndef DEFAULT_LOG_LEVEL
+  #define DEFAULT_LOG_LEVEL TinyLogger::Level::VERBOSE
 #endif
 
 #ifndef DEFAULT_STATUS_LED_GPIO
@@ -103,6 +118,10 @@
   #define DEFAULT_OT_RX_LED_GPIO GPIO_IS_NOT_CONFIGURED
 #endif
 
+#ifndef DEFAULT_OT_FAULT_STATE_GPIO
+  #define DEFAULT_OT_FAULT_STATE_GPIO GPIO_IS_NOT_CONFIGURED
+#endif
+
 #ifndef DEFAULT_SENSOR_OUTDOOR_GPIO
   #define DEFAULT_SENSOR_OUTDOOR_GPIO GPIO_IS_NOT_CONFIGURED
 #endif
@@ -119,7 +138,9 @@
   #define PROGMEM 
 #endif
 
-#ifndef GPIO_IS_VALID_GPIO
+#ifdef ARDUINO_ARCH_ESP32
+  #include <driver/gpio.h>
+#elif !defined(GPIO_IS_VALID_GPIO)
   #define GPIO_IS_VALID_GPIO(gpioNum) (gpioNum >= 0 && gpioNum <= 16)
 #endif
 

@@ -1,14 +1,15 @@
 #include <Arduino.h>
 #include "defines.h"
 #include "strings.h"
+#include "CrashRecorder.h"
 #include <ArduinoJson.h>
 #include <FileData.h>
 #include <LittleFS.h>
-#include "ESPTelnetStream.h"
+#include <ESPTelnetStream.h>
 #include <TinyLogger.h>
-#include <NetworkManager.h>
+#include <NetworkMgr.h>
 #include "Settings.h"
-#include <utils.h>
+#include "utils.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
   #include <ESP32Scheduler.h>
@@ -27,11 +28,13 @@
 #include "PortalTask.h"
 #include "MainTask.h"
 
+using namespace NetworkUtils;
+
 // Vars
 FileData fsNetworkSettings(&LittleFS, "/network.conf", 'n', &networkSettings, sizeof(networkSettings), 1000);
 FileData fsSettings(&LittleFS, "/settings.conf", 's', &settings, sizeof(settings), 60000);
 ESPTelnetStream* telnetStream = nullptr;
-Network::Manager* network = nullptr;
+NetworkMgr* network = nullptr;
 
 // Tasks
 MqttTask* tMqtt;
@@ -43,6 +46,7 @@ MainTask* tMain;
 
 
 void setup() {
+  CrashRecorder::init();
   LittleFS.begin();
 
   Log.setLevel(TinyLogger::Level::VERBOSE);
@@ -127,23 +131,28 @@ void setup() {
     Log.addStream(telnetStream);
   }
 
-  Log.setLevel(settings.system.debug ? TinyLogger::Level::VERBOSE : TinyLogger::Level::INFO);
+  if (settings.system.logLevel >= TinyLogger::Level::SILENT && settings.system.logLevel <= TinyLogger::Level::VERBOSE) {
+    Log.setLevel(static_cast<TinyLogger::Level>(settings.system.logLevel));
+  }
 
   // network
-  network = (new Network::Manager)
+  network = (new NetworkMgr)
     ->setHostname(networkSettings.hostname)
     ->setStaCredentials(
-    #ifdef WOKWI
-      "Wokwi-GUEST", nullptr, 6
-    #else
       strlen(networkSettings.sta.ssid) ? networkSettings.sta.ssid : nullptr,
       strlen(networkSettings.sta.password) ? networkSettings.sta.password : nullptr,
       networkSettings.sta.channel
-    #endif
     )->setApCredentials(
       strlen(networkSettings.ap.ssid) ? networkSettings.ap.ssid : nullptr,
       strlen(networkSettings.ap.password) ? networkSettings.ap.password : nullptr,
       networkSettings.ap.channel
+    )
+    ->setUseDhcp(networkSettings.useDhcp)
+    ->setStaticConfig(
+      networkSettings.staticConfig.ip,
+      networkSettings.staticConfig.gateway,
+      networkSettings.staticConfig.subnet,
+      networkSettings.staticConfig.dns
     );
 
   // tasks
