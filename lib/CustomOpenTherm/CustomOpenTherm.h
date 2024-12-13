@@ -98,66 +98,6 @@ public:
     ));
   }
 
-  bool setHeatingCh1Temp(float temperature) {
-    unsigned long response = this->sendRequest(buildRequest(
-      OpenThermMessageType::WRITE_DATA,
-      OpenThermMessageID::TSet,
-      temperatureToData(temperature)
-    ));
-
-    return isValidResponse(response);
-  }
-
-  bool setHeatingCh2Temp(float temperature) {
-    unsigned long response = this->sendRequest(buildRequest(
-      OpenThermMessageType::WRITE_DATA,
-      OpenThermMessageID::TsetCH2,
-      temperatureToData(temperature)
-    ));
-
-    return isValidResponse(response);
-  }
-
-  bool setDhwTemp(float temperature) {
-    unsigned long response = this->sendRequest(buildRequest(
-      OpenThermMessageType::WRITE_DATA,
-      OpenThermMessageID::TdhwSet,
-      temperatureToData(temperature)
-    ));
-
-    return isValidResponse(response);
-  }
-
-  bool setRoomSetpoint(float temperature) {
-    unsigned long response = this->sendRequest(buildRequest(
-      OpenThermMessageType::WRITE_DATA,
-      OpenThermMessageID::TrSet,
-      temperatureToData(temperature)
-    ));
-
-    return isValidResponse(response);
-  }
-
-  bool setRoomSetpointCh2(float temperature) {
-    unsigned long response = this->sendRequest(buildRequest(
-      OpenThermMessageType::WRITE_DATA,
-      OpenThermMessageID::TrSetCH2,
-      temperatureToData(temperature)
-    ));
-
-    return isValidResponse(response);
-  }
-
-  bool setRoomTemp(float temperature) {
-    unsigned long response = this->sendRequest(buildRequest(
-      OpenThermMessageType::WRITE_DATA,
-      OpenThermMessageID::Tr,
-      temperatureToData(temperature)
-    ));
-
-    return isValidResponse(response);
-  }
-
   bool sendBoilerReset() {
     unsigned int data = 1;
     data <<= 8;
@@ -167,7 +107,7 @@ public:
       data
     ));
 
-    return isValidResponse(response);
+    return isValidResponse(response) && isValidResponseId(response, OpenThermMessageID::RemoteRequest);
   }
 
   bool sendServiceReset() {
@@ -179,7 +119,7 @@ public:
       data
     ));
 
-    return isValidResponse(response);
+    return isValidResponse(response) && isValidResponseId(response, OpenThermMessageID::RemoteRequest);
   }
 
   bool sendWaterFilling() {
@@ -191,7 +131,13 @@ public:
       data
     ));
 
-    return isValidResponse(response);
+    return isValidResponse(response) && isValidResponseId(response, OpenThermMessageID::RemoteRequest);
+  }
+
+  static bool isValidResponseId(unsigned long response, OpenThermMessageID id) {
+    byte responseId = (response >> 16) & 0xFF;
+    
+    return (byte)id == responseId;
   }
 
   // converters
